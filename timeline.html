@@ -2,7 +2,9 @@
 <html lang="en">
 
 <!-- -----
-        Be sure to set your actual API key in place of "YOUR_API_KEY" (line 20)
+        Add a Google Maps API key near the top of this file if you want
+        map rendering and Google place lookups. The viewer can still load
+        timeline data without one.
 
         Version: March 24, 2026
         Full details here:
@@ -17,7 +19,7 @@
 
     <!-- Google Maps importLibrary loader -->
     <script>
-        window.GOOGLE_MAPS_API_KEY = "YOUR_API_KEY"; // Replace YOUR_API_KEY with your actual key
+        window.GOOGLE_MAPS_API_KEY = ""; // Optional: add your Google Maps API key to enable map features
 
         (g => {
             var h, a, k, p = "The Google Maps JavaScript API", c = "google", l = "importLibrary", q = "__ib__", m = document, b = window;
@@ -1073,6 +1075,36 @@
             opacity: 0;
             pointer-events: none; /* Prevent interaction with hidden map */
         }
+        #map.map-unavailable {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            box-sizing: border-box;
+            background:
+                radial-gradient(circle at top left, rgba(0, 123, 255, 0.08), transparent 35%),
+                linear-gradient(180deg, #f8f9fa 0%, #eef3f7 100%);
+        }
+        .map-unavailable-card {
+            max-width: 420px;
+            padding: 18px 20px;
+            border: 1px solid #d6dde5;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+            text-align: left;
+            color: #344054;
+        }
+        .map-unavailable-card h3 {
+            margin: 0 0 8px 0;
+            font-size: 18px;
+            color: #1f2937;
+        }
+        .map-unavailable-card p {
+            margin: 0;
+            line-height: 1.45;
+            font-size: 14px;
+        }
         /* --- Loading Overlay --- */
         #loading-overlay {
             position: fixed;
@@ -1417,7 +1449,7 @@
 <div id="apiKeyModal"><!-- not used atm. will fix later -->
     <div class="modal-content">
         <h3>Enter API Key</h3>
-        <p>A Google Maps API Key is required. Please enter it below to continue.</p>
+        <p>A Google Maps API key is optional. Add one if you want map rendering and Google place lookups.</p>
         <p><small>The key is only stored for this browser session.</small></p>
         <input type="text" id="apiKeyInput" placeholder="Paste your API key here">
         <button id="apiKeySubmit">Submit</button>
@@ -1796,7 +1828,8 @@
 
 <script>
     // --- Global Variables ---
-    let map;
+    let map = null;
+    let mapServicesAvailable = false;
 	let currentMapTheme = 'standard';
     let markers = [];
     let polylines = [];
@@ -1840,6 +1873,71 @@
 	let visitsChartInstance = null;
 	let currentChartStartDate = null;
 	let currentChartEndDate = null;
+
+    function hasConfiguredGoogleMapsApiKey() {
+        const apiKey = (window.GOOGLE_MAPS_API_KEY || '').trim();
+        return apiKey !== '' && apiKey !== 'YOUR_API_KEY';
+    }
+
+    function getMapUnavailableMessage() {
+        if (hasConfiguredGoogleMapsApiKey()) {
+            return "Google Maps couldn't be loaded. You can still load data, browse the timeline, and use summaries.";
+        }
+        return "Map features and Google place lookups are optional. You can still load timeline data without an API key; missing place names will stay unknown unless they already exist in your file or cache.";
+    }
+
+    function renderMapUnavailableState(message = getMapUnavailableMessage()) {
+        const mapElement = document.getElementById('map');
+        if (!mapElement) return;
+
+        mapElement.classList.add('map-unavailable');
+        mapElement.innerHTML = `
+            <div class="map-unavailable-card">
+                <h3>Map Unavailable</h3>
+                <p>${escapeHtml(message)}</p>
+            </div>
+        `;
+    }
+
+    function clearMapUnavailableState() {
+        const mapElement = document.getElementById('map');
+        if (!mapElement) return;
+
+        mapElement.classList.remove('map-unavailable');
+        mapElement.innerHTML = '';
+    }
+
+    function syncOptionalFeatureControls() {
+        const hasMapControls = uiEnabled && mapServicesAvailable && !!map;
+        const hasApiKey = hasConfiguredGoogleMapsApiKey();
+
+        const areaBtn = document.getElementById('areaBtn');
+        if (areaBtn) areaBtn.disabled = !hasMapControls;
+
+        const worldBtn = document.getElementById('worldBtn');
+        if (worldBtn) worldBtn.disabled = !hasMapControls;
+
+        const fitMapBtn = document.getElementById('fitMapBtn');
+        if (fitMapBtn) fitMapBtn.disabled = !hasMapControls;
+
+        const currentLocationBtn = document.getElementById('currentLocationBtn');
+        if (currentLocationBtn) currentLocationBtn.disabled = !hasMapControls;
+
+        const editPathOnMapBtn = document.getElementById('editPathOnMapBtn');
+        if (editPathOnMapBtn) editPathOnMapBtn.disabled = !mapServicesAvailable || !map;
+
+        const mapThemeSelect = document.getElementById('map-theme-select');
+        if (mapThemeSelect) mapThemeSelect.disabled = !uiEnabled || !mapServicesAvailable || !map;
+
+        const disableApiBtn = document.getElementById('disableApiBtn');
+        if (disableApiBtn) {
+            disableApiBtn.disabled = !hasApiKey;
+            disableApiBtn.classList.toggle('active', hasApiKey && apiCallsDisabled);
+            disableApiBtn.textContent = hasApiKey
+                ? (apiCallsDisabled ? 'API Disabled' : 'Disable API')
+                : 'API Unavailable';
+        }
+    }
 
 	// --- Activity Type Mapping ---
     // Groups similar activity types for display and filtering
@@ -1984,12 +2082,26 @@
     let GoogleMap; // Renamed to avoid conflict with built-in Map
 
     async function initMap() {
+        if (!hasConfiguredGoogleMapsApiKey()) {
+            map = null;
+            AdvancedMarkerElement = null;
+            Place = null;
+            GoogleMap = null;
+            window.googleGeometry = null;
+            mapServicesAvailable = false;
+            apiCallsDisabled = true;
+            renderMapUnavailableState();
+            syncOptionalFeatureControls();
+            return false;
+        }
+
         try {
+            clearMapUnavailableState();
             // First import the maps library
             const { Map } = await google.maps.importLibrary("maps");
-            const {ColorScheme} = await google.maps.importLibrary("core")
+            const { ColorScheme } = await google.maps.importLibrary("core");
             const geometryModule = await google.maps.importLibrary("geometry");
-			window.googleGeometry = geometryModule;
+            window.googleGeometry = geometryModule;
             GoogleMap = Map;
             map = new GoogleMap(document.getElementById('map'), {
                 center: { lat: 25.034170, lng: 121.564560 },
@@ -2009,21 +2121,30 @@
 
             const placesModule = await google.maps.importLibrary("places");
             Place = placesModule.Place;
+            mapServicesAvailable = true;
+            syncOptionalFeatureControls();
 
             console.log("Map and libraries loaded successfully");
+            return true;
         } catch (error) {
+            map = null;
+            AdvancedMarkerElement = null;
+            Place = null;
+            GoogleMap = null;
+            window.googleGeometry = null;
+            mapServicesAvailable = false;
             console.error("Error initializing map libraries:", error);
-            // Check if the error is due to API key issues specifically
-            if (error.message && (error.message.includes("ApiNotActivatedMapError") || error.message.includes("InvalidKeyMapError") || error.message.includes("ProjectNotLinkedToBillingError") )) {
-                alert("Failed to load Google Maps: API Key issue. Please check your API key, ensure the Maps JavaScript API is enabled, and that your project is linked to a billing account.");
-            } else {
-                alert("Failed to load Google Maps libraries. Please check your internet connection and API key settings.");
-            }
+            renderMapUnavailableState();
+            syncOptionalFeatureControls();
+            return false;
         }
     }
+
     function initCurrentLocationButton() {
         const locationButton = document.getElementById('currentLocationBtn');
         locationButton.addEventListener('click', () => {
+            if (!mapServicesAvailable || !map || !AdvancedMarkerElement) return;
+
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
@@ -2361,13 +2482,14 @@
             const rawSemantic = isIOS ? locationData?.semanticType : locationData.semanticType;
             const semanticType = getCustomSemanticType(placeId, rawSemantic)?.toUpperCase();
             const lowerName = locationData?.name?.toLowerCase();
+            const cachedDisplayName = placeId ? placeDetailsCache[placeId]?.displayName : null;
             
             if (semanticType === "HOME" || semanticType === "TYPE_HOME" || lowerName === "home") {
                 locationName = "Home";
             } else if (semanticType === "WORK" || semanticType === "TYPE_WORK" || lowerName === "work") {
                 locationName = "Work";
             } else {
-                locationName = locationData?.name || 'Unknown Location';
+                locationName = cachedDisplayName || locationData?.name || 'Unknown Location';
             }
 
             placeTypesForStyle = locationData.placeTypes || [];
@@ -2512,6 +2634,8 @@
 
     // Renders a place visit marker (handles both standard and iOS formats)
     function renderPlaceVisit(itemData, index, sidebarItem = null) {
+        if (!mapServicesAvailable || !map) return;
+
         let locationName, placeId, lat, lng, startTimestamp, endTimestamp, originalVisitData, semanticTypeStr;
 
         // Adapt based on data structure (standard vs. iOS)
@@ -2522,13 +2646,14 @@
             
             const upperSemantic = semanticTypeStr?.toUpperCase();
             const lowerName = placeVisit.location.name?.toLowerCase();
+            const cachedDisplayName = placeId ? placeDetailsCache[placeId]?.displayName : null;
 
             if (upperSemantic === "TYPE_HOME" || upperSemantic === "HOME" || lowerName === "home") {
                 locationName = "Home";
             } else if (upperSemantic === "TYPE_WORK" || upperSemantic === "WORK" || lowerName === "work") {
                 locationName = "Work";
             } else {
-                locationName = placeVisit.location.name;
+                locationName = cachedDisplayName || placeVisit.location.name;
             }
             lat = placeVisit.location.latitudeE7 / 1e7;
             lng = placeVisit.location.longitudeE7 / 1e7;
@@ -2542,13 +2667,14 @@
             
             const upperSemantic = semanticTypeStr?.toUpperCase();
             const lowerName = visit.topCandidate?.name?.toLowerCase();
+            const cachedDisplayName = placeId ? placeDetailsCache[placeId]?.displayName : null;
 
             if (upperSemantic === "HOME" || upperSemantic === "TYPE_HOME" || lowerName === "home") {
                 locationName = "Home";
             } else if (upperSemantic === "WORK" || upperSemantic === "TYPE_WORK" || lowerName === "work") {
                 locationName = "Work";
             } else {
-                locationName = visit.topCandidate?.name || visit.topCandidate?.semanticType;
+                locationName = cachedDisplayName || visit.topCandidate?.name || visit.topCandidate?.semanticType;
             }
 
             const geoCoords = parseGeoString(visit.topCandidate?.placeLocation);
@@ -2619,6 +2745,8 @@
 
     // Renders a simple marker when no Place ID is available or fetch fails
     function renderBasicMarker(lat, lng, name, placeVisit, index) {
+        if (!mapServicesAvailable || !map || !window.google?.maps) return;
+
         const position = { lat, lng };
 
         // Check if marker library is loaded
@@ -2679,6 +2807,8 @@
 
     // Fetches place details using the new Place.fetchFields method
     async function fetchPlaceDetails(placeId, fallbackName, placeVisit, index, sidebarItem = null) {
+        if (!mapServicesAvailable || !map || !Place) return;
+
         const lat = placeVisit.location && placeVisit.location.latitudeE7 ? placeVisit.location.latitudeE7 / 1e7 : NaN;
         const lng = placeVisit.location && placeVisit.location.longitudeE7 ? placeVisit.location.longitudeE7 / 1e7 : NaN;
         const customSemanticType = getCustomSemanticType(placeId, placeVisit.location && placeVisit.location.semanticType);
@@ -2872,6 +3002,8 @@
 
     // Renders the marker and InfoWindow using fetched Place Details (new API)
     async function renderPlaceDetails(place, placeVisit, index, sidebarItem = null) {
+        if (!mapServicesAvailable || !map || !window.google?.maps) return;
+
         // Determine the display name, prioritizing "Home" or "Work" if applicable
         let displayName = place.displayName;
         const placeId = place.id; // Use place.id
@@ -3009,6 +3141,8 @@
 
     // Renders an activity segment as a polyline on the map
     function renderActivitySegment(activitySegment, index) {
+        if (!mapServicesAvailable || !map || !window.google?.maps) return;
+
         let path = [];
         const startLat = activitySegment.startLocation?.latitudeE7 / 1e7 || activitySegment.startLocation?.lat; // Support direct lat/lng too
         const startLng = activitySegment.startLocation?.longitudeE7 / 1e7 || activitySegment.startLocation?.lng;
@@ -3072,6 +3206,7 @@
 
     // Fetches *only* the photo for an InfoWindow if not already fetched
     async function fetchPhotoForInfoWindow(infoWindow) {
+        if (!mapServicesAvailable || !map || !Place) return;
 
         // If API calls are disabled, skip photo fetch
         if (apiCallsDisabled) {
@@ -3167,6 +3302,8 @@
 
     // Adds click listener to a marker to open InfoWindow and highlight sidebar
     function addMarkerClickListener(marker, infoWindow, index) {
+        if (!mapServicesAvailable || !map) return;
+
         marker.addListener('click', async () => {
             if (!marker.map) return; // Don't do anything if marker isn't on map
 
@@ -3193,6 +3330,8 @@
 
     // Adds click listener to a polyline to highlight it and the sidebar item
     function addPolylineClickListener(polyline, timelineItem, path) {
+        if (!mapServicesAvailable || !map) return;
+
         polyline.addListener('click', (e) => { // e is PolyMouseEvent
             if (!polyline.getMap()) return; // Ignore clicks if not on map
 
@@ -3212,7 +3351,7 @@
 
     // Adds click listener to a sidebar item to interact with the map
     function addSidebarItemClickListener(sidebarItem, index, marker, infoWindow, polyline, path) {
-        if (!sidebarItem) return;
+        if (!sidebarItem || !mapServicesAvailable || !map) return;
 
         sidebarItem.addEventListener('click', async () => {
             highlightSidebarItem(index); // Highlight this item
@@ -3450,7 +3589,7 @@
 
     // Adjusts map bounds to fit all currently visible markers and polylines
     function fitMapToData() {
-        if (!uiEnabled) return;
+        if (!uiEnabled || !mapServicesAvailable || !map || !window.google?.maps) return;
 
         const bounds = new google.maps.LatLngBounds();
         let itemCount = 0;
@@ -3589,7 +3728,7 @@
             let firstLocationSet = false;
             relevantData.forEach((item, localIndex) => {
                 // Center map on the first item of the day
-                if (!firstLocationSet) {
+                if (mapServicesAvailable && map && !firstLocationSet) {
                     let latLng;
                     if (item.placeVisit) {
                         latLng = { lat: item.placeVisit.location.latitudeE7 / 1e7, lng: item.placeVisit.location.longitudeE7 / 1e7 };
@@ -3617,9 +3756,9 @@
                 document.getElementById('timeline').appendChild(timelineItem);
 
                 // Render corresponding map elements (marker or polyline)
-                if (item.placeVisit || item.visit) {
+                if (mapServicesAvailable && map && (item.placeVisit || item.visit)) {
                     renderPlaceVisit(item, globalIndex); // Pass the whole item
-                } else if (item.activitySegment) { // Standard activity segment
+                } else if (mapServicesAvailable && map && item.activitySegment) { // Standard activity segment
                     renderActivitySegment(item.activitySegment, globalIndex);
                 } else if (item.activity) { // Transformed iOS activity now looks like an activitySegment
                     // This case should be handled by readFilesFromDirectory transforming iOS activities
@@ -3694,7 +3833,7 @@
 
 
     function findPlacesInMapArea() {
-        if (!map) return;
+        if (!mapServicesAvailable || !map || !window.google?.maps) return;
         const bounds = map.getBounds();
         if (!bounds) {
             alert("Map is not ready yet. Please try again.");
@@ -3796,6 +3935,8 @@
      * @param {Array} visits - An array of visit items found in the map area.
      */
     function displayAreaResults(results, isConsolidated) {
+        if (!mapServicesAvailable || !map) return;
+
         const resultsContainer = document.getElementById('areaResults');
         resultsContainer.innerHTML = '';
         clearMap();
@@ -4949,9 +5090,10 @@
         const saveCacheBtn = document.getElementById('saveCacheBtn');
 
         disableApiBtn.addEventListener('click', () => {
+            if (!hasConfiguredGoogleMapsApiKey()) return;
+
             apiCallsDisabled = !apiCallsDisabled;
-            disableApiBtn.textContent = apiCallsDisabled ? 'API Disabled' : 'Disable API';
-            disableApiBtn.classList.toggle('active', apiCallsDisabled);
+            syncOptionalFeatureControls();
             console.log(`API calls ${apiCallsDisabled ? 'disabled' : 'enabled'}.`);
             if (!apiCallsDisabled){
                 document.getElementById('goBtn').click();
@@ -5046,6 +5188,8 @@
             document.getElementById('saveCacheBtn').disabled = newCount <= 0;
             updateViewToggleButtons();
         }
+
+        syncOptionalFeatureControls();
     }
 
     // Reads files from the selected directory (handles Takeout structure and single Timeline.json)
@@ -5885,6 +6029,11 @@
 
 
     document.getElementById('editPathOnMapBtn').addEventListener('click', () => {
+        if (!mapServicesAvailable || !map || !window.google?.maps) {
+            alert('Path editing on the map requires Google Maps to be enabled.');
+            return;
+        }
+
         document.getElementById('editEntryModal').style.display = 'none';
         document.getElementById('pathEditOverlay').style.display = 'block';
 
@@ -6376,7 +6525,7 @@
             currentMapTheme = e.target.value;
             await saveSetting('mapTheme', currentMapTheme);
             
-            if (map) {
+            if (mapServicesAvailable && map) {
                 // The API strictly requires recreating the map to change the color scheme
                 const { Map } = await google.maps.importLibrary("maps");
                 const { ColorScheme } = await google.maps.importLibrary("core");
@@ -7026,7 +7175,7 @@ Departed: ${end}</description>
         const worldSidebar = document.getElementById('worldSidebarContent');
 
         worldBtn.addEventListener('click', () => {
-            if (!uiEnabled) return;
+            if (!uiEnabled || !mapServicesAvailable || !map) return;
 
             // State
             summaryViewVisible = false;
@@ -7110,6 +7259,8 @@ Departed: ${end}</description>
     }
 
     function checkAndRenderWorldData() {
+        if (!mapServicesAvailable || !map) return;
+
         const legacyPlaces = Object.values(placeDetailsCache).filter(needsCacheUpdate);
         const uncachedPlaceIds = getUncachedPlaceIds();
 
@@ -7163,6 +7314,8 @@ Departed: ${end}</description>
     }
 
     async function fetchMissingPlaces(limit = null) {
+        if (!hasConfiguredGoogleMapsApiKey() || !Place) return;
+
         const btnAll = document.getElementById('fetchUncachedBtn');
         const btn100 = document.getElementById('fetchUncached100Btn');
         const progressDiv = document.getElementById('fetchUncachedProgress');
@@ -7268,6 +7421,8 @@ Departed: ${end}</description>
 
 
     async function updateLegacyCache(limit = null) {
+        if (!hasConfiguredGoogleMapsApiKey() || !Place) return;
+
         const btnAll = document.getElementById('updateLegacyCacheBtn');
         const btn100 = document.getElementById('updateLegacyCache100Btn');
         const progressDiv = document.getElementById('updateCacheProgress');
@@ -7337,6 +7492,8 @@ Departed: ${end}</description>
     }
 
     function renderWorldData() {
+        if (!mapServicesAvailable || !map || !window.google?.maps) return;
+
         clearMap(); // Clear timeline lines/pins
         clearWorldMarkers();
 
@@ -7482,19 +7639,6 @@ Departed: ${end}</description>
 
 
     async function initializeApp() {
-        // Check if the API key placeholder is still present
-        if (window.GOOGLE_MAPS_API_KEY === "YOUR_API_KEY" || window.GOOGLE_MAPS_API_KEY === "") {
-            alert("Please replace 'YOUR_API_KEY' in the HTML (near the top of the <script> block) with your actual Google Maps API Key.");
-            // Optionally, disable functionality or hide the map
-            document.getElementById('howToMessage').innerHTML = "<h3>Configuration Error</h3><p>Please set your Google Maps API key in the HTML file to use this tool.</p>";
-            document.getElementById('howToMessage').style.display = "block";
-            // Disable controls if API key is not set
-            setUIEnabled(false);
-            const folderPicker = document.getElementById('folderPicker');
-            if(folderPicker) folderPicker.disabled = true; // Also disable folder picker explicitly
-            return; // Stop further execution
-        }
-
         try {
             // Load stored settings from IndexedDB first
             const storedTimezone = await getSetting('displayTimezone');
@@ -7529,6 +7673,15 @@ Departed: ${end}</description>
                 if (themeSelect) themeSelect.value = currentMapTheme;
             }
 
+            apiCallsDisabled = !hasConfiguredGoogleMapsApiKey();
+            if (!hasConfiguredGoogleMapsApiKey()) {
+                document.getElementById('howToMessage').innerHTML = `
+                    <h3>How to use:</h3>
+                    <p>You can load timeline data without a Google Maps API key. Map rendering, area search, world view, and Google place lookups stay disabled until a key is added.</p>
+                    <p>Click "Load Data" on the left and choose the folder that contains your Timeline data. If you already have a saved "TimelinePlaceCache.json", keep it in the same folder to preserve place names and reduce unknown locations.</p>
+                `;
+            }
+
             // Initialize the map and all UI components
             await initMap();
             initDatePicker();
@@ -7547,6 +7700,7 @@ Departed: ${end}</description>
             setUIEnabled(false);
             showSidebarTab('date');
             updateApiCallDisplay();
+            syncOptionalFeatureControls();
 
             // --- Attach event listeners ---
             document.getElementById('calendarBtn').addEventListener('click', () => showSidebarTab('date'));
@@ -7613,10 +7767,8 @@ Departed: ${end}</description>
 
         } catch (error) {
             console.error("Error during initialization:", error);
-            const modal = document.getElementById('apiKeyModal');
-            if (modal.style.display !== 'flex') { // Only alert if the modal isn't already showing
-                alert("An error occurred during map initialization. Your API key may be invalid or missing required permissions (Maps JavaScript API). Please check the console for details.");
-            }
+            renderMapUnavailableState("The viewer hit an initialization error, but you can still try loading timeline data.");
+            syncOptionalFeatureControls();
         }
     }
 

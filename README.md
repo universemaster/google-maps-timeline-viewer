@@ -61,7 +61,10 @@ Setup procedure:
     - Ensure that the archive contained a folder called "Location History (Timeline)". If not, you'll need to use on-device data, as described above. (Note that "Timeline Edits.json" is *not* the same as the "Timeline.json" that comes from your device.)
   
 
-## Obtain a Google Maps API Key
+## Obtain a Google Maps API Key (Optional)
+
+You can now open the viewer and load timeline data without adding an API key.
+Without one, Google Maps rendering, area search, world view, and live Google place lookups stay disabled, and some places may remain "Unknown Location" unless that data already exists in your export or cache.
 
 1. **Go to the Google Cloud Console:**
     - Visit [Google Cloud Console](https://console.cloud.google.com/).
@@ -91,13 +94,14 @@ Setup procedure:
 1. **Download The Google Maps Timeline Viewer:**
     - Save this project's [timeline.html](https://raw.githubusercontent.com/kurupted/google-maps-timeline-viewer/refs/heads/main/timeline.html) file anywhere you like, either on your computer (eg in My Documents) or on your mobile device. (To save, copy/paste the text into eg Notepad, and save as "timeline.html")
    
-4. **Add your API key:**
+4. **Optional: Add your API key:**
    - Open the timeline.html file in a text editor and find the code below, near the top:
      ```html
      <script>
 		  window.GOOGLE_MAPS_API_KEY = "YOUR_API_KEY"; // Replace YOUR_API_KEY with your actual key
      ```
    - Replace `YOUR_API_KEY` with the key you obtained from the Google Cloud Console, and save.
+   - If you skip this step, the app still works for local timeline loading and non-map views.
 
 
 ## View Your Timeline
