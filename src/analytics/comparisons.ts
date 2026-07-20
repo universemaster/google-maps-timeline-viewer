@@ -51,7 +51,7 @@ function histogramMedian(histogram: readonly number[]): number | null {
 export function comparePlaces(placeIds: readonly string[], places: readonly Place[], visits: readonly Visit[], journeys: readonly Journey[], timeZone: string): PlaceComparisonRow[] {
   const profiles = placeIds.flatMap(id => {
     const place = places.find(candidate => candidate.id === id);
-    return place ? [buildPlaceProfile(place, visits, journeys, timeZone)] : [];
+    return place ? [buildPlaceProfile(place, visits, journeys, timeZone, Date.now(), places)] : [];
   });
   const baseline = profiles[0];
   if (!baseline) return [];

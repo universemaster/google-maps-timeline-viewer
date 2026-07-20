@@ -65,6 +65,8 @@ describe("place profiles", () => {
     expect(profile.arrivalHours[10]).toBe(1);
     expect(profile.commonPreviousPlaces[0]).toEqual({ placeId: "home", count: 2 });
     expect(profile.commonNextPlaces[0]).toEqual({ placeId: "home", count: 2 });
+    expect(profile.meanDistanceToReachMeters).toBe(1_000);
+    expect(profile.coordinateClusterCount).toBe(1);
     expect(profile.byYear.map(row => row.visits)).toEqual([1, 1]);
     expect(profile.currentIntervalMs).toBe(24 * 3_600_000);
   });

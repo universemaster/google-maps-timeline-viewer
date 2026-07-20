@@ -8024,12 +8024,17 @@ Departed: ${end}</description>
         const panel = document.getElementById('placeProfilePanel');
         const previous = profile.commonPreviousPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
         const next = profile.commonNextPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
+        const origins = profile.commonOrigins.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough linked journeys';
+        const destinations = profile.commonDestinations.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough linked journeys';
+        const sequences = profile.commonJourneySequences.slice(0, 3).map(row => `${row.placeIds.map(id => escapeHtml(canonical.places.find(place => place.id === id)?.name || 'Unknown')).join(' → ')} (${row.count})`).join('<br>') || 'Not enough repeated sequences';
         const placeVisits = canonical.visits.filter(visit => visit.placeId === profile.place.id).sort((a, b) => (b.interval.start || '').localeCompare(a.interval.start || ''));
         const otherPlaces = canonical.places.filter(place => place.id !== profile.place.id && !place.ignored).sort((a, b) => a.name.localeCompare(b.name));
         const placeOptions = otherPlaces.map(place => `<option value="${place.id}">${escapeHtml(place.name)}</option>`).join('');
         const centre = profile.place.coordinates || { latitude: 0, longitude: 0 };
         const radius = profile.place.boundary?.kind === 'circle' ? profile.place.boundary.radiusMeters : Math.max(25, Math.round(profile.coordinateSpreadMeters || 50));
         const polygonText = profile.place.boundary?.kind === 'polygon' ? profile.place.boundary.vertices.map(point => `${point.latitude}, ${point.longitude}`).join('\n') : '';
+        const undoneCorrectionIds = new Set((canonical.corrections || []).filter(command => command.type === 'undo').map(command => command.targetCommandId));
+        const placeCorrections = (canonical.corrections || []).filter(command => command.type !== 'undo' && !undoneCorrectionIds.has(command.id) && (command.placeId === profile.place.id || command.sourcePlaceId === profile.place.id || command.targetPlaceId === profile.place.id || command.sourcePlaceIds?.includes(profile.place.id) || (command.visitId && placeVisits.some(visit => visit.id === command.visitId)))).sort((a, b) => b.revision - a.revision);
         panel.innerHTML = `
             <h3>${escapeHtml(profile.place.name)}</h3>
             <p>${profile.trend === 'insufficient-data' ? 'Not enough history for a direction yet.' : `Visits are ${profile.trend} across recent years.`}</p>
@@ -8048,7 +8053,14 @@ Departed: ${end}</description>
                 <tr><td>Middle 50%</td><td>${formatAnalyticsDuration(profile.duration.p25)} – ${formatAnalyticsDuration(profile.duration.p75)}</td></tr>
                 <tr><td>Typical previous places</td><td>${escapeHtml(previous)}</td></tr>
                 <tr><td>Typical next places</td><td>${escapeHtml(next)}</td></tr>
+                <tr><td>Common origins</td><td>${escapeHtml(origins)}</td></tr>
+                <tr><td>Common destinations</td><td>${escapeHtml(destinations)}</td></tr>
+                <tr><td>Distance travelled to arrive</td><td>${profile.meanDistanceToReachMeters === null ? '—' : `${formatDistance(profile.meanDistanceToReachMeters)} mean · ${formatDistance(profile.medianDistanceToReachMeters)} median`}</td></tr>
+                <tr><td>Common journey sequences</td><td>${sequences}</td></tr>
                 <tr><td>Estimated coordinate spread</td><td>${profile.coordinateSpreadMeters === null ? '—' : `${Math.round(profile.coordinateSpreadMeters)} m`}</td></tr>
+                <tr><td>Raw coordinate clusters</td><td>${profile.coordinateClusterCount}</td></tr>
+                <tr><td>Estimated geofence radius</td><td>${profile.estimatedGeofenceRadiusMeters === null ? '—' : `${Math.round(profile.estimatedGeofenceRadiusMeters)} m`}</td></tr>
+                <tr><td>Possible nearby duplicates</td><td>${profile.possibleDuplicatePlaceIds.map(id => escapeHtml(canonical.places.find(place => place.id === id)?.name || 'Unknown')).join(', ') || 'None detected'}</td></tr>
                 <tr><td>Low-confidence / uncertain visits</td><td>${profile.lowConfidenceVisits} / ${profile.uncertainTimes}</td></tr>
             </table>
             <section class="place-editor">
@@ -8103,6 +8115,10 @@ Departed: ${end}</description>
                 <p><small>${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length} automatic rule${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length === 1 ? '' : 's'} already saved for this place.</small></p>
                 <div class="place-editor-grid"><label>Minimum duration (minutes)<input id="annotationRuleDuration" type="number" min="0" value="30"></label><label>Purpose<select id="annotationRulePurpose">${PlacesAnalytics.VISIT_PURPOSES.map(purpose => `<option>${purpose}</option>`).join('')}</select></label></div>
                 <div class="suggestion-actions"><button id="saveAnnotationRule">Create rule</button></div>
+
+                <h4>Correction history</h4>
+                <p><small>Edits are append-only and reversible; imported source records remain unchanged.</small></p>
+                <div class="visit-correction-list">${placeCorrections.length ? placeCorrections.map(command => `<div class="visit-correction-row"><span>${escapeHtml(command.type.replaceAll('-', ' '))}<br><small>${formatTimestamp(command.createdAt, 'D MMM YYYY, HH:mm')}</small></span><button data-undo-correction="${command.id}">Undo</button></div>`).join('') : '<p>No saved corrections for this place.</p>'}</div>
             </section>`;
 
         const proposedBoundary = () => {
@@ -8215,6 +8231,11 @@ Departed: ${end}</description>
             });
             await showIntelligenceView();
         });
+        panel.querySelectorAll('[data-undo-correction]').forEach(button => button.addEventListener('click', async () => {
+            if (!confirm('Undo this correction? The undo is itself saved in the local correction history.')) return;
+            await appendPlaceCorrection({ type: 'undo', targetCommandId: button.dataset.undoCorrection });
+            await showIntelligenceView();
+        }));
     }
 
     function replayPointProjector(plan) {
@@ -8720,7 +8741,7 @@ Departed: ${end}</description>
             ['Largest gap', formatAnalyticsDuration(daily.largestTrackingGapMs)], ['Data confidence', quality.visitConfidence.median === null ? '—' : `${Math.round(quality.visitConfidence.median)}/100`],
         ];
         document.getElementById('dailyIntelligenceCards').innerHTML = cards.map(([label, value]) => `<div class="intelligence-card"><span>${label}</span><strong>${value}</strong></div>`).join('');
-        const profiles = canonical.places.map(place => PlacesAnalytics.buildPlaceProfile(place, canonical.visits, canonical.journeys, timeZone, Date.now())).filter(profile => profile.visitCount > 0);
+        const profiles = canonical.places.filter(place => !place.ignored).map(place => PlacesAnalytics.buildPlaceProfile(place, canonical.visits, canonical.journeys, timeZone, Date.now(), canonical.places)).filter(profile => profile.visitCount > 0);
         profiles.sort((a, b) => {
             const score = profile => Math.log1p(profile.visitCount) * 10 + Math.log1p(profile.totalDurationMs / 3600000) * 5 + (profile.trend === 'increasing' ? 8 : 0) + (profile.lowConfidenceVisits ? 4 : 0);
             return score(b) - score(a) || b.totalDurationMs - a.totalDurationMs;

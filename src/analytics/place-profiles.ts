@@ -1,6 +1,6 @@
 import type { Journey, Place, Visit } from "../model/types.js";
 import { durationMilliseconds } from "./intervals.js";
-import { estimatedRadiusMeters } from "./spatial.js";
+import { estimatedRadiusMeters, haversineMeters } from "./spatial.js";
 import { summarizeDistribution, type DistributionSummary } from "./statistics.js";
 import { localParts, monthKey } from "./time.js";
 
@@ -41,7 +41,15 @@ export interface PlaceProfile {
   commonNextPlaces: Array<{ placeId: string; count: number }>;
   commonArrivalModes: Array<{ mode: string; count: number }>;
   commonDepartureModes: Array<{ mode: string; count: number }>;
+  meanDistanceToReachMeters: number | null;
+  medianDistanceToReachMeters: number | null;
+  commonOrigins: Array<{ placeId: string; count: number }>;
+  commonDestinations: Array<{ placeId: string; count: number }>;
+  commonJourneySequences: Array<{ placeIds: string[]; count: number }>;
   coordinateSpreadMeters: number | null;
+  coordinateClusterCount: number;
+  possibleDuplicatePlaceIds: string[];
+  estimatedGeofenceRadiusMeters: number | null;
   lowConfidenceVisits: number;
   overlappingVisits: number;
   uncertainTimes: number;
@@ -110,12 +118,35 @@ function surroundingContext(target: Visit[], allVisits: Visit[], journeys: Journ
   };
 }
 
+function coordinateClusterCount(visits: readonly Visit[], radiusMeters = 30): number {
+  const centres: NonNullable<Visit["coordinates"]>[] = [];
+  visits.forEach(visit => {
+    if (!visit.coordinates) return;
+    if (!centres.some(centre => haversineMeters(centre, visit.coordinates!) <= radiusMeters)) centres.push(visit.coordinates);
+  });
+  return centres.length;
+}
+
+function journeySequences(targetIds: Set<string>, allVisits: readonly Visit[]): Array<{ placeIds: string[]; count: number }> {
+  const sorted = [...allVisits].filter(visit => visit.interval.start).sort((a, b) => a.interval.start!.localeCompare(b.interval.start!));
+  const counts = new Map<string, { placeIds: string[]; count: number }>();
+  sorted.forEach((visit, index) => {
+    if (!targetIds.has(visit.id)) return;
+    const placeIds = sorted.slice(Math.max(0, index - 2), Math.min(sorted.length, index + 3)).map(item => item.placeId);
+    const key = placeIds.join("\u001f");
+    const current = counts.get(key);
+    counts.set(key, current ? { ...current, count: current.count + 1 } : { placeIds, count: 1 });
+  });
+  return [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 5);
+}
+
 export function buildPlaceProfile(
   place: Place,
   allVisits: readonly Visit[],
   journeys: readonly Journey[],
   timeZone: string,
   now = Date.now(),
+  allPlaces: readonly Place[] = [],
 ): PlaceProfile {
   const visits = allVisits.filter(visit => visit.placeId === place.id).sort((a, b) => (a.interval.start ?? "").localeCompare(b.interval.start ?? ""));
   const complete = visits.filter(visit => visit.interval.start && visit.interval.end);
@@ -138,6 +169,13 @@ export function buildPlaceProfile(
   const recent = byYear.slice(-3).map(row => row.visits);
   const trend = recent.length < 2 ? "insufficient-data" : recent.at(-1)! > recent[0]! * 1.1 ? "increasing" : recent.at(-1)! < recent[0]! * 0.9 ? "decreasing" : "stable";
   const context = surroundingContext(visits, [...allVisits], [...journeys]);
+  const arrivals = journeys.filter(journey => journey.endPlaceId === place.id || visits.some(visit => visit.interval.start && journey.interval.end && journey.interval.end <= visit.interval.start && Date.parse(visit.interval.start) - Date.parse(journey.interval.end) <= 30 * 60_000));
+  const departures = journeys.filter(journey => journey.startPlaceId === place.id);
+  const arrivalDistances = arrivals.flatMap(journey => journey.distanceMeters === null ? [] : [journey.distanceMeters]);
+  const originCounts = counts(arrivals.flatMap(journey => journey.startPlaceId ? [journey.startPlaceId] : [])).map(({ value, count }) => ({ placeId: value, count }));
+  const destinationCounts = counts(departures.flatMap(journey => journey.endPlaceId ? [journey.endPlaceId] : [])).map(({ value, count }) => ({ placeId: value, count }));
+  const coordinates = visits.flatMap(visit => visit.coordinates ? [visit.coordinates] : []);
+  const spread = estimatedRadiusMeters(coordinates);
   let overlappingVisits = 0;
   for (let index = 1; index < complete.length; index += 1) {
     if (Date.parse(complete[index]?.interval.start as string) < Date.parse(complete[index - 1]?.interval.end as string)) overlappingVisits += 1;
@@ -169,7 +207,15 @@ export function buildPlaceProfile(
     commonNextPlaces: context.next,
     commonArrivalModes: context.arrivals,
     commonDepartureModes: context.departures,
-    coordinateSpreadMeters: estimatedRadiusMeters(visits.flatMap(visit => visit.coordinates ? [visit.coordinates] : [])),
+    meanDistanceToReachMeters: summarizeDistribution(arrivalDistances).mean,
+    medianDistanceToReachMeters: summarizeDistribution(arrivalDistances).median,
+    commonOrigins: originCounts,
+    commonDestinations: destinationCounts,
+    commonJourneySequences: journeySequences(new Set(visits.map(visit => visit.id)), allVisits),
+    coordinateSpreadMeters: spread,
+    coordinateClusterCount: coordinateClusterCount(visits),
+    possibleDuplicatePlaceIds: place.coordinates ? allPlaces.filter(candidate => candidate.id !== place.id && candidate.coordinates && haversineMeters(place.coordinates!, candidate.coordinates) <= Math.max(30, spread ?? 30)).map(candidate => candidate.id) : [],
+    estimatedGeofenceRadiusMeters: place.boundary?.kind === "circle" ? place.boundary.radiusMeters : spread,
     lowConfidenceVisits: visits.filter(visit => visit.confidence && visit.confidence.score < 60).length,
     overlappingVisits,
     uncertainTimes: visits.filter(visit => visit.interval.startUncertain || visit.interval.endUncertain).length,

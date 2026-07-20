@@ -5610,7 +5610,27 @@ var PlacesAnalytics = (() => {
       departures: counts(departureModes).map(({ value, count }) => ({ mode: value, count }))
     };
   }
-  function buildPlaceProfile(place, allVisits, journeys, timeZone, now = Date.now()) {
+  function coordinateClusterCount(visits, radiusMeters = 30) {
+    const centres = [];
+    visits.forEach((visit) => {
+      if (!visit.coordinates) return;
+      if (!centres.some((centre) => haversineMeters(centre, visit.coordinates) <= radiusMeters)) centres.push(visit.coordinates);
+    });
+    return centres.length;
+  }
+  function journeySequences(targetIds, allVisits) {
+    const sorted = [...allVisits].filter((visit) => visit.interval.start).sort((a2, b2) => a2.interval.start.localeCompare(b2.interval.start));
+    const counts2 = /* @__PURE__ */ new Map();
+    sorted.forEach((visit, index) => {
+      if (!targetIds.has(visit.id)) return;
+      const placeIds = sorted.slice(Math.max(0, index - 2), Math.min(sorted.length, index + 3)).map((item) => item.placeId);
+      const key = placeIds.join("");
+      const current = counts2.get(key);
+      counts2.set(key, current ? { ...current, count: current.count + 1 } : { placeIds, count: 1 });
+    });
+    return [...counts2.values()].sort((a2, b2) => b2.count - a2.count).slice(0, 5);
+  }
+  function buildPlaceProfile(place, allVisits, journeys, timeZone, now = Date.now(), allPlaces = []) {
     const visits = allVisits.filter((visit) => visit.placeId === place.id).sort((a2, b2) => (a2.interval.start ?? "").localeCompare(b2.interval.start ?? ""));
     const complete = visits.filter((visit) => visit.interval.start && visit.interval.end);
     const durations = complete.flatMap((visit) => {
@@ -5632,6 +5652,13 @@ var PlacesAnalytics = (() => {
     const recent = byYear.slice(-3).map((row) => row.visits);
     const trend = recent.length < 2 ? "insufficient-data" : recent.at(-1) > recent[0] * 1.1 ? "increasing" : recent.at(-1) < recent[0] * 0.9 ? "decreasing" : "stable";
     const context = surroundingContext(visits, [...allVisits], [...journeys]);
+    const arrivals = journeys.filter((journey) => journey.endPlaceId === place.id || visits.some((visit) => visit.interval.start && journey.interval.end && journey.interval.end <= visit.interval.start && Date.parse(visit.interval.start) - Date.parse(journey.interval.end) <= 30 * 6e4));
+    const departures = journeys.filter((journey) => journey.startPlaceId === place.id);
+    const arrivalDistances = arrivals.flatMap((journey) => journey.distanceMeters === null ? [] : [journey.distanceMeters]);
+    const originCounts = counts(arrivals.flatMap((journey) => journey.startPlaceId ? [journey.startPlaceId] : [])).map(({ value, count }) => ({ placeId: value, count }));
+    const destinationCounts = counts(departures.flatMap((journey) => journey.endPlaceId ? [journey.endPlaceId] : [])).map(({ value, count }) => ({ placeId: value, count }));
+    const coordinates = visits.flatMap((visit) => visit.coordinates ? [visit.coordinates] : []);
+    const spread = estimatedRadiusMeters(coordinates);
     let overlappingVisits = 0;
     for (let index = 1; index < complete.length; index += 1) {
       if (Date.parse(complete[index]?.interval.start) < Date.parse(complete[index - 1]?.interval.end)) overlappingVisits += 1;
@@ -5663,7 +5690,15 @@ var PlacesAnalytics = (() => {
       commonNextPlaces: context.next,
       commonArrivalModes: context.arrivals,
       commonDepartureModes: context.departures,
-      coordinateSpreadMeters: estimatedRadiusMeters(visits.flatMap((visit) => visit.coordinates ? [visit.coordinates] : [])),
+      meanDistanceToReachMeters: summarizeDistribution(arrivalDistances).mean,
+      medianDistanceToReachMeters: summarizeDistribution(arrivalDistances).median,
+      commonOrigins: originCounts,
+      commonDestinations: destinationCounts,
+      commonJourneySequences: journeySequences(new Set(visits.map((visit) => visit.id)), allVisits),
+      coordinateSpreadMeters: spread,
+      coordinateClusterCount: coordinateClusterCount(visits),
+      possibleDuplicatePlaceIds: place.coordinates ? allPlaces.filter((candidate) => candidate.id !== place.id && candidate.coordinates && haversineMeters(place.coordinates, candidate.coordinates) <= Math.max(30, spread ?? 30)).map((candidate) => candidate.id) : [],
+      estimatedGeofenceRadiusMeters: place.boundary?.kind === "circle" ? place.boundary.radiusMeters : spread,
       lowConfidenceVisits: visits.filter((visit) => visit.confidence && visit.confidence.score < 60).length,
       overlappingVisits,
       uncertainTimes: visits.filter((visit) => visit.interval.startUncertain || visit.interval.endUncertain).length
@@ -6703,7 +6738,7 @@ var PlacesAnalytics = (() => {
   function comparePlaces(placeIds, places, visits, journeys, timeZone) {
     const profiles = placeIds.flatMap((id) => {
       const place = places.find((candidate) => candidate.id === id);
-      return place ? [buildPlaceProfile(place, visits, journeys, timeZone)] : [];
+      return place ? [buildPlaceProfile(place, visits, journeys, timeZone, Date.now(), places)] : [];
     });
     const baseline = profiles[0];
     if (!baseline) return [];
