@@ -1491,6 +1491,14 @@
         .quality-issue { border-left:4px solid #f0ad4e; background:#fafbfc; padding:9px 11px; margin:7px 0; border-radius:5px; }
         .quality-issue[data-severity="high"], .quality-issue[data-severity="critical"] { border-color:#8c3b65; }
         .quality-issue small { color:#667085; }
+        .discovery-settings { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:9px; margin:10px 0 15px; }
+        .discovery-settings label { color:#667085; font-size:12px; }
+        .discovery-settings input, .discovery-settings select { display:block; width:100%; margin-top:4px; box-sizing:border-box; border:1px solid #cfd8e6; border-radius:7px; padding:7px; }
+        .suggestion-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+        .suggestion-card { border:1px solid #dfe6ef; border-radius:11px; padding:13px; background:#fbfcfe; }
+        .suggestion-card h4 { margin:0 0 4px; }
+        .suggestion-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+        .suggestion-actions button, .suggestion-actions select { border:1px solid #cfd8e6; background:white; border-radius:6px; padding:6px 8px; cursor:pointer; }
         @media (max-width: 900px) { .intelligence-layout, .quality-columns { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
     </style>
 </head>
@@ -1822,6 +1830,18 @@
                     <div><h4>Issues worth reviewing</h4><div id="qualityIssueList"></div></div>
                 </div>
             </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Suggested places</h3><p>Repeated dwell clusters that are not represented by a well-defined saved place.</p></div></div>
+                <div class="discovery-settings">
+                    <label>Environment<select id="discoveryEnvironment"><option value="urban">Urban · 30 m</option><option value="suburban" selected>Suburban · 50 m</option><option value="rural">Rural · 75 m</option></select></label>
+                    <label>Minimum dwell (minutes)<input id="discoveryMinimumDwell" type="number" min="1" value="10"></label>
+                    <label>Minimum distinct days<input id="discoveryMinimumDays" type="number" min="1" value="3"></label>
+                    <label>Minimum total time (minutes)<input id="discoveryMinimumTotal" type="number" min="1" value="60"></label>
+                    <label>Detected radius (metres)<input id="discoveryRadius" type="number" min="5" value="50"></label>
+                </div>
+                <div class="replay-toolbar"><button id="refreshSuggestions" class="primary">Refresh suggestions</button><span id="suggestionStatus"></span></div>
+                <div id="suggestionGrid" class="suggestion-grid"></div>
+            </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
                 <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
@@ -1981,6 +2001,7 @@
 	let currentChartStartDate = null;
 	let currentChartEndDate = null;
     let replayController = null;
+    const hiddenSuggestionIds = new Set();
 
     function hasConfiguredGoogleMapsApiKey() {
         const apiKey = (window.GOOGLE_MAPS_API_KEY || '').trim();
@@ -7890,7 +7911,7 @@ Departed: ${end}</description>
         return hours ? `${hours} h ${remainder ? `${remainder} min` : ''}`.trim() : `${remainder} min`;
     }
 
-    function buildCanonicalAnalyticsTimeline() {
+    async function buildCanonicalAnalyticsTimeline() {
         const timelineObjects = Object.values(timelineData).flatMap(month => month.timelineObjects || []);
         const canonical = PlacesAnalytics.normalizeTimeline(
             { timelineObjects },
@@ -7906,8 +7927,12 @@ Departed: ${end}</description>
             if (cached?.displayName?.text) place.name = cached.displayName.text;
             else if (cached?.name && typeof cached.name === 'string') place.name = cached.name;
         });
-        canonical.visits = canonical.visits.map(visit => ({ ...visit, confidence: PlacesAnalytics.scoreVisit(visit) }));
+        const corrections = await PlacesAnalytics.placesPersistence.getCorrections();
+        const corrected = PlacesAnalytics.applyCorrections(canonical.places, canonical.visits, corrections);
+        canonical.places = corrected.places;
+        canonical.visits = corrected.visits.map(visit => ({ ...visit, confidence: PlacesAnalytics.scoreVisit(visit) }));
         canonical.journeys = canonical.journeys.map(journey => ({ ...journey, confidence: PlacesAnalytics.scoreJourney(journey) }));
+        canonical.corrections = corrections;
         return canonical;
     }
 
@@ -8086,6 +8111,113 @@ Departed: ${end}</description>
         document.getElementById('qualityIssueList').innerHTML = issueRows.length ? issueRows.map(issue => `<div class="quality-issue" data-severity="${issue.severity}"><strong>${escapeHtml(issue.description)}</strong><br><small>${issue.at ? formatTimestamp(issue.at, 'D MMM YYYY, HH:mm') : 'No timestamp'} · ${issue.severity} confidence risk</small></div>`).join('') : '<p>No high-signal problems were found in these imported records.</p>';
     }
 
+    function discoverySettings() {
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem('places.discovery.settings') || '{}'); } catch (_) {}
+        const environment = document.getElementById('discoveryEnvironment').value || saved.environment || 'suburban';
+        const detectedRadius = Number(document.getElementById('discoveryRadius').value || 50);
+        return {
+            ...PlacesAnalytics.DEFAULT_PLACE_DISCOVERY_SETTINGS,
+            ...saved,
+            environment,
+            minimumDwellMs: Number(document.getElementById('discoveryMinimumDwell').value || 10) * 60000,
+            minimumDistinctVisitDays: Number(document.getElementById('discoveryMinimumDays').value || 3),
+            minimumTotalDurationMs: Number(document.getElementById('discoveryMinimumTotal').value || 60) * 60000,
+            [`${environment}RadiusMeters`]: detectedRadius,
+        };
+    }
+
+    function hydrateDiscoverySettings() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('places.discovery.settings') || 'null');
+            if (!saved) return;
+            document.getElementById('discoveryEnvironment').value = saved.environment || 'suburban';
+            document.getElementById('discoveryMinimumDwell').value = Math.round((saved.minimumDwellMs || 600000) / 60000);
+            document.getElementById('discoveryMinimumDays').value = saved.minimumDistinctVisitDays || 3;
+            document.getElementById('discoveryMinimumTotal').value = Math.round((saved.minimumTotalDurationMs || 3600000) / 60000);
+            document.getElementById('discoveryRadius').value = saved[`${saved.environment || 'suburban'}RadiusMeters`] || 50;
+        } catch (_) {}
+    }
+
+    function saveDiscoverySettings(settings) {
+        localStorage.setItem('places.discovery.settings', JSON.stringify(settings));
+    }
+
+    async function recordSuggestionDecision(suggestion, decision, targetPlaceId = null) {
+        hiddenSuggestionIds.add(suggestion.id);
+        await PlacesAnalytics.placesPersistence.putSuggestionDecision({
+            suggestionId: suggestion.id,
+            decision,
+            decidedAt: new Date().toISOString(),
+            ...(targetPlaceId ? { targetPlaceId } : {}),
+        });
+    }
+
+    async function acceptSuggestedPlace(suggestion, canonical) {
+        const visits = suggestion.visitIds.map(id => canonical.visits.find(visit => visit.id === id)).filter(Boolean);
+        if (!visits.length) return;
+        const createdAt = new Date().toISOString();
+        const newPlace = {
+            id: `user_${suggestion.id}`,
+            name: `Suggested place near ${suggestion.centre.latitude.toFixed(4)}, ${suggestion.centre.longitude.toFixed(4)}`,
+            category: null,
+            coordinates: suggestion.centre,
+            boundary: { kind: 'circle', centre: suggestion.centre, radiusMeters: suggestion.radiusMeters },
+            googlePlaceId: null,
+            semanticType: null,
+            ignored: false,
+            notes: suggestion.reason,
+            tags: [],
+            sourceReferences: visits.map(visit => visit.source),
+        };
+        const revision = Date.now();
+        await PlacesAnalytics.placesPersistence.putCorrection({ id: `correction_${revision}`, createdAt, revision, type: 'split-place', sourcePlaceId: visits[0].placeId, newPlace, visitIds: suggestion.visitIds });
+        for (const visit of visits.slice(1)) {
+            await PlacesAnalytics.placesPersistence.putCorrection({ id: `correction_${revision}_${visit.id}`, createdAt, revision: revision + 1, type: 'reassign-visit', visitId: visit.id, placeId: newPlace.id });
+        }
+        await recordSuggestionDecision(suggestion, 'accepted');
+    }
+
+    async function mergeSuggestedPlace(suggestion, targetPlaceId) {
+        const createdAt = new Date().toISOString();
+        for (const [index, visitId] of suggestion.visitIds.entries()) {
+            await PlacesAnalytics.placesPersistence.putCorrection({ id: `correction_${Date.now()}_${index}`, createdAt, revision: Date.now() + index, type: 'reassign-visit', visitId, placeId: targetPlaceId });
+        }
+        await recordSuggestionDecision(suggestion, 'merged', targetPlaceId);
+    }
+
+    async function renderSuggestedPlaces(canonical, timeZone) {
+        const settings = discoverySettings();
+        saveDiscoverySettings(settings);
+        const decisions = await PlacesAnalytics.placesPersistence.getSuggestionDecisions();
+        const decided = new Set(decisions.filter(decision => ['accepted', 'merged', 'ignored-permanently'].includes(decision.decision)).map(decision => decision.suggestionId));
+        const suggestions = PlacesAnalytics.discoverPlaces(canonical.places, canonical.visits, canonical.journeys, timeZone, settings).filter(suggestion => !decided.has(suggestion.id) && !hiddenSuggestionIds.has(suggestion.id));
+        document.getElementById('suggestionStatus').textContent = `${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`;
+        const knownPlaces = canonical.places.filter(place => place.googlePlaceId || place.category || place.boundary).sort((a, b) => a.name.localeCompare(b.name));
+        const grid = document.getElementById('suggestionGrid');
+        grid.innerHTML = suggestions.length ? suggestions.map((suggestion, index) => `
+            <article class="suggestion-card" data-suggestion-index="${index}">
+                <h4>${suggestion.classification.replaceAll('-', ' ')}</h4>
+                <small>${suggestion.confidence}/100 confidence</small>
+                <p>${escapeHtml(suggestion.reason)}</p>
+                <p><strong>${suggestion.visitCount}</strong> visits · <strong>${suggestion.uniqueDays}</strong> days · <strong>${formatAnalyticsDuration(suggestion.totalDurationMs)}</strong><br>
+                ${formatTimestamp(suggestion.firstVisitAt, 'D MMM YYYY')} to ${formatTimestamp(suggestion.mostRecentVisitAt, 'D MMM YYYY')} · radius ${Math.round(suggestion.radiusMeters)} m</p>
+                <div class="suggestion-actions">
+                    <button data-suggestion-action="accept">Save place</button>
+                    <select data-suggestion-target><option value="">Merge with…</option>${knownPlaces.map(place => `<option value="${place.id}">${escapeHtml(place.name)}</option>`).join('')}</select>
+                    <button data-suggestion-action="ignore-once">Ignore once</button>
+                    <button data-suggestion-action="ignore-permanently">Always ignore</button>
+                </div>
+            </article>`).join('') : '<p>No unresolved clusters meet the current thresholds.</p>';
+        grid.querySelectorAll('.suggestion-card').forEach(card => {
+            const suggestion = suggestions[Number(card.dataset.suggestionIndex)];
+            card.querySelector('[data-suggestion-action="accept"]').addEventListener('click', async () => { await acceptSuggestedPlace(suggestion, canonical); await showIntelligenceView(); });
+            card.querySelector('[data-suggestion-target]').addEventListener('change', async event => { if (event.target.value) { await mergeSuggestedPlace(suggestion, event.target.value); await showIntelligenceView(); } });
+            card.querySelector('[data-suggestion-action="ignore-once"]').addEventListener('click', async () => { await recordSuggestionDecision(suggestion, 'ignored-once'); await renderSuggestedPlaces(canonical, timeZone); });
+            card.querySelector('[data-suggestion-action="ignore-permanently"]').addEventListener('click', async () => { await recordSuggestionDecision(suggestion, 'ignored-permanently'); await renderSuggestedPlaces(canonical, timeZone); });
+        });
+    }
+
     function loadReplay(canonical, date, timeZone) {
         stopReplay();
         const plan = PlacesAnalytics.buildReplayPlan(date, timeZone, canonical.places, canonical.visits, canonical.journeys);
@@ -8108,9 +8240,9 @@ Departed: ${end}</description>
         document.getElementById('replayCompareDate').addEventListener('change', () => replayController && renderReplayComparison(replayController));
     }
 
-    function showIntelligenceView() {
+    async function showIntelligenceView() {
         if (!uiEnabled) return;
-        const canonical = buildCanonicalAnalyticsTimeline();
+        const canonical = await buildCanonicalAnalyticsTimeline();
         const timeZone = getSelectedTimezone();
         const selectedDate = document.getElementById('startDatePicker').value;
         const daily = PlacesAnalytics.buildSelectedDaySummary(selectedDate, timeZone, canonical.places, canonical.visits, canonical.journeys);
@@ -8138,6 +8270,7 @@ Departed: ${end}</description>
         if (profiles.length) list.querySelector('.place-analysis-row')?.click();
         loadReplay(canonical, selectedDate, timeZone);
         renderDataQuality(canonical, timeZone);
+        await renderSuggestedPlaces(canonical, timeZone);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';
@@ -8151,7 +8284,13 @@ Departed: ${end}</description>
 
     function initIntelligenceView() {
         initReplayControls();
-        document.getElementById('intelligenceBtn').addEventListener('click', showIntelligenceView);
+        hydrateDiscoverySettings();
+        document.getElementById('refreshSuggestions').addEventListener('click', () => replayController && renderSuggestedPlaces(replayController.canonical, replayController.timeZone));
+        document.getElementById('discoveryEnvironment').addEventListener('change', event => {
+            const radiusByEnvironment = { urban: 30, suburban: 50, rural: 75 };
+            document.getElementById('discoveryRadius').value = radiusByEnvironment[event.target.value];
+        });
+        document.getElementById('intelligenceBtn').addEventListener('click', () => void showIntelligenceView());
         document.getElementById('closeIntelligenceBtn').addEventListener('click', () => {
             document.getElementById('intelligenceView').style.display = 'none';
             document.getElementById('map').classList.remove('hidden');
