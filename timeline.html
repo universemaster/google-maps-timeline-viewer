@@ -15,6 +15,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <link rel="icon" href="data:,">
     <title>Google Maps Timeline Viewer</title>
 
     <!-- Google Maps importLibrary loader -->
@@ -1481,7 +1482,16 @@
         .replay-metric { background:#f7f9fc; border-radius:8px; padding:8px; }
         .replay-metric small { display:block; color:#667085; }
         .pause-options { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:#4b5565; }
-        @media (max-width: 900px) { .intelligence-layout { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
+        .quality-heatmap { display:grid; grid-template-columns:repeat(auto-fill,minmax(12px,1fr)); gap:3px; margin:12px 0 18px; }
+        .quality-day { aspect-ratio:1; min-height:12px; border-radius:2px; background:#e7ebf1; }
+        .quality-columns { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+        .quality-bar-row { display:grid; grid-template-columns:minmax(110px,1fr) 3fr 55px; gap:8px; align-items:center; margin:7px 0; font-size:12px; }
+        .quality-bar-track { height:9px; background:#edf0f5; border-radius:9px; overflow:hidden; }
+        .quality-bar-fill { height:100%; background:#5a95f5; border-radius:9px; }
+        .quality-issue { border-left:4px solid #f0ad4e; background:#fafbfc; padding:9px 11px; margin:7px 0; border-radius:5px; }
+        .quality-issue[data-severity="high"], .quality-issue[data-severity="critical"] { border-color:#8c3b65; }
+        .quality-issue small { color:#667085; }
+        @media (max-width: 900px) { .intelligence-layout, .quality-columns { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
     </style>
 </head>
 <body>
@@ -1801,6 +1811,16 @@
                 </div>
                 <div id="replayMetrics" class="replay-metrics"></div>
                 <div id="replayComparison" style="margin-top:10px"></div>
+            </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Data quality</h3><p>How complete and trustworthy the imported history appears to be.</p></div></div>
+                <div id="qualitySummaryCards" class="intelligence-grid"></div>
+                <h4>Coverage by day</h4>
+                <div id="qualityCoverageHeatmap" class="quality-heatmap"></div>
+                <div class="quality-columns">
+                    <div><h4>Confidence distribution</h4><div id="qualityConfidenceBars"></div></div>
+                    <div><h4>Issues worth reviewing</h4><div id="qualityIssueList"></div></div>
+                </div>
             </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
@@ -8036,6 +8056,36 @@ Departed: ${end}</description>
         container.innerHTML = `<strong>Compared with ${moment(compareDate).format('D MMM YYYY')}</strong> · outside ${signedDuration(selected.timeOutsideHomeMs - comparison.timeOutsideHomeMs)}, distance ${selected.totalDistanceMeters - comparison.totalDistanceMeters >= 0 ? '+' : '−'}${formatDistance(Math.abs(selected.totalDistanceMeters - comparison.totalDistanceMeters))}, places ${selected.placesVisited - comparison.placesVisited >= 0 ? '+' : ''}${selected.placesVisited - comparison.placesVisited}`;
     }
 
+    function renderDataQuality(canonical, timeZone) {
+        const quality = PlacesAnalytics.buildDataQualityDashboard(canonical.places, canonical.visits, canonical.journeys, timeZone, Date.now());
+        const summary = quality.summary;
+        const cards = [
+            ['Range coverage', `${quality.selectedRangeCoveragePercent.toFixed(1)}%`],
+            ['Median gap', formatAnalyticsDuration(quality.gaps.median)],
+            ['Longest gap', formatAnalyticsDuration(quality.gaps.maximum)],
+            ['Overlapping visits', summary.overlappingVisits.toLocaleString()],
+            ['Impossible speeds', summary.impossibleSpeedEvents.toLocaleString()],
+            ['Duplicate places nearby', quality.duplicatePlaceCandidates.length.toLocaleString()],
+            ['Missing coordinates', summary.invalidOrMissingCoordinates.toLocaleString()],
+            ['Latest data', summary.mostRecentImportedDataDate ? formatTimestamp(summary.mostRecentImportedDataDate, 'D MMM YYYY') : '—'],
+        ];
+        document.getElementById('qualitySummaryCards').innerHTML = cards.map(([label, value]) => `<div class="intelligence-card"><span>${label}</span><strong>${value}</strong></div>`).join('');
+        document.getElementById('qualityCoverageHeatmap').innerHTML = quality.dailyCoverage.map(day => {
+            const lightness = 96 - Math.min(1, day.coveragePercent / 100) * 48;
+            return `<i class="quality-day" style="background:hsl(216 80% ${lightness}%)" title="${day.date}: ${day.coveragePercent.toFixed(1)}% covered; longest gap ${formatAnalyticsDuration(day.longestGapMs)}"></i>`;
+        }).join('');
+        const confidenceValues = quality.dailyCoverage.map(day => day.confidence);
+        const buckets = [
+            ['0–19', confidenceValues.filter(value => value < 20).length], ['20–39', confidenceValues.filter(value => value >= 20 && value < 40).length],
+            ['40–59', confidenceValues.filter(value => value >= 40 && value < 60).length], ['60–79', confidenceValues.filter(value => value >= 60 && value < 80).length],
+            ['80–100', confidenceValues.filter(value => value >= 80).length],
+        ];
+        const maximum = Math.max(1, ...buckets.map(([, count]) => count));
+        document.getElementById('qualityConfidenceBars').innerHTML = buckets.map(([label, count]) => `<div class="quality-bar-row"><span>${label}</span><div class="quality-bar-track"><div class="quality-bar-fill" style="width:${count / maximum * 100}%"></div></div><strong>${count}</strong></div>`).join('');
+        const issueRows = quality.issues.slice(0, 20);
+        document.getElementById('qualityIssueList').innerHTML = issueRows.length ? issueRows.map(issue => `<div class="quality-issue" data-severity="${issue.severity}"><strong>${escapeHtml(issue.description)}</strong><br><small>${issue.at ? formatTimestamp(issue.at, 'D MMM YYYY, HH:mm') : 'No timestamp'} · ${issue.severity} confidence risk</small></div>`).join('') : '<p>No high-signal problems were found in these imported records.</p>';
+    }
+
     function loadReplay(canonical, date, timeZone) {
         stopReplay();
         const plan = PlacesAnalytics.buildReplayPlan(date, timeZone, canonical.places, canonical.visits, canonical.journeys);
@@ -8087,6 +8137,7 @@ Departed: ${end}</description>
         }));
         if (profiles.length) list.querySelector('.place-analysis-row')?.click();
         loadReplay(canonical, selectedDate, timeZone);
+        renderDataQuality(canonical, timeZone);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';
