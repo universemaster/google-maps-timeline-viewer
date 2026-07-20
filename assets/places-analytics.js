@@ -6308,12 +6308,22 @@ var PlacesAnalytics = (() => {
       database.close();
     }
   }
+  async function remove(storeName, key) {
+    const database = await openPlacesDatabase();
+    try {
+      const transaction = database.transaction(storeName, "readwrite");
+      await requestResult(transaction.objectStore(storeName).delete(key));
+    } finally {
+      database.close();
+    }
+  }
   var placesPersistence = {
     putCorrection: (command) => put("corrections", command),
     getCorrections: () => getAll("corrections"),
     putAnnotation: (annotation) => put("annotations", annotation),
     getAnnotations: () => getAll("annotations"),
     putAnnotationRule: (rule) => put("annotation-rules", rule),
+    deleteAnnotationRule: (id) => remove("annotation-rules", id),
     getAnnotationRules: () => getAll("annotation-rules"),
     putSuggestionDecision: (decision) => put("suggestion-decisions", decision),
     getSuggestionDecisions: () => getAll("suggestion-decisions"),

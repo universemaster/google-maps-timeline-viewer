@@ -64,12 +64,21 @@ async function get<T>(storeName: string, key: IDBValidKey): Promise<T | undefine
   finally { database.close(); }
 }
 
+async function remove(storeName: string, key: IDBValidKey): Promise<void> {
+  const database = await openPlacesDatabase();
+  try {
+    const transaction = database.transaction(storeName, "readwrite");
+    await requestResult(transaction.objectStore(storeName).delete(key));
+  } finally { database.close(); }
+}
+
 export const placesPersistence = {
   putCorrection: (command: CorrectionCommand) => put("corrections", command),
   getCorrections: () => getAll<CorrectionCommand>("corrections"),
   putAnnotation: (annotation: VisitAnnotation) => put("annotations", annotation),
   getAnnotations: () => getAll<VisitAnnotation>("annotations"),
   putAnnotationRule: (rule: AnnotationRule) => put("annotation-rules", rule),
+  deleteAnnotationRule: (id: string) => remove("annotation-rules", id),
   getAnnotationRules: () => getAll<AnnotationRule>("annotation-rules"),
   putSuggestionDecision: (decision: StoredSuggestionDecision) => put("suggestion-decisions", decision),
   getSuggestionDecisions: () => getAll<StoredSuggestionDecision>("suggestion-decisions"),

@@ -8142,6 +8142,7 @@ Departed: ${end}</description>
                 <p><small>${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length} automatic rule${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length === 1 ? '' : 's'} already saved for this place.</small></p>
                 <div class="place-editor-grid"><label>Minimum duration (minutes)<input id="annotationRuleDuration" type="number" min="0" value="30"></label><label>Purpose<select id="annotationRulePurpose">${PlacesAnalytics.VISIT_PURPOSES.map(purpose => `<option>${purpose}</option>`).join('')}</select></label></div>
                 <div class="suggestion-actions"><button id="saveAnnotationRule">Create rule</button></div>
+                <div class="visit-correction-list">${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).map(rule => `<div class="visit-correction-row"><span><strong>${escapeHtml(rule.name)}</strong><br><small>${rule.enabled ? 'Enabled' : 'Paused'}</small></span><span><button data-toggle-annotation-rule="${rule.id}">${rule.enabled ? 'Pause' : 'Enable'}</button> <button data-delete-annotation-rule="${rule.id}">Delete</button></span></div>`).join('')}</div>
 
                 <h4>Correction history</h4>
                 <p><small>Edits are append-only and reversible; imported source records remain unchanged.</small></p>
@@ -8267,6 +8268,17 @@ Departed: ${end}</description>
             });
             await showIntelligenceView();
         });
+        panel.querySelectorAll('[data-toggle-annotation-rule]').forEach(button => button.addEventListener('click', async () => {
+            const rule = canonical.annotationRules.find(item => item.id === button.dataset.toggleAnnotationRule);
+            if (!rule) return;
+            await PlacesAnalytics.placesPersistence.putAnnotationRule({ ...rule, enabled: !rule.enabled });
+            await showIntelligenceView();
+        }));
+        panel.querySelectorAll('[data-delete-annotation-rule]').forEach(button => button.addEventListener('click', async () => {
+            if (!confirm('Delete this automatic annotation rule? Existing manual annotations are not removed.')) return;
+            await PlacesAnalytics.placesPersistence.deleteAnnotationRule(button.dataset.deleteAnnotationRule);
+            await showIntelligenceView();
+        }));
         panel.querySelectorAll('[data-undo-correction]').forEach(button => button.addEventListener('click', async () => {
             if (!confirm('Undo this correction? The undo is itself saved in the local correction history.')) return;
             await appendPlaceCorrection({ type: 'undo', targetCommandId: button.dataset.undoCorrection });
