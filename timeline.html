@@ -7946,6 +7946,14 @@ Departed: ${end}</description>
         canonical.places = corrected.places;
         canonical.visits = corrected.visits.map(visit => ({ ...visit, confidence: PlacesAnalytics.scoreVisit(visit) }));
         canonical.journeys = canonical.journeys.map(journey => ({ ...journey, confidence: PlacesAnalytics.scoreJourney(journey) }));
+        const [manualAnnotations, annotationRules] = await Promise.all([
+            PlacesAnalytics.placesPersistence.getAnnotations(),
+            PlacesAnalytics.placesPersistence.getAnnotationRules(),
+        ]);
+        canonical.annotations = PlacesAnalytics.mergeAnnotations(PlacesAnalytics.applyAnnotationRules(canonical.visits, annotationRules), manualAnnotations);
+        const annotationByVisit = new Map(canonical.annotations.map(annotation => [annotation.visitId, annotation]));
+        canonical.visits = canonical.visits.map(visit => ({ ...visit, annotationId: annotationByVisit.get(visit.id)?.id || null }));
+        canonical.annotationRules = annotationRules;
         canonical.corrections = corrections;
         return canonical;
     }
@@ -8021,8 +8029,36 @@ Departed: ${end}</description>
 
                 <h4>Split or reassign visits</h4>
                 <label>New split name<input id="splitPlaceName" placeholder="Name for the separated place"></label>
-                <div class="visit-correction-list">${placeVisits.map(visit => `<div class="visit-correction-row"><input type="checkbox" data-split-visit="${visit.id}"><span>${visit.interval.start ? formatTimestamp(visit.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${formatAnalyticsDuration(visit.interval.start && visit.interval.end ? Date.parse(visit.interval.end) - Date.parse(visit.interval.start) : null)}</span><select data-reassign-visit="${visit.id}"><option value="">Reassign to…</option>${placeOptions}</select></div>`).join('')}</div>
+                <div class="visit-correction-list">${placeVisits.map(visit => {
+                    const annotation = canonical.annotations.find(item => item.visitId === visit.id);
+                    return `<div class="visit-correction-row"><input type="checkbox" data-split-visit="${visit.id}"><span>${visit.interval.start ? formatTimestamp(visit.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${formatAnalyticsDuration(visit.interval.start && visit.interval.end ? Date.parse(visit.interval.end) - Date.parse(visit.interval.start) : null)}${annotation?.purpose ? `<br><small>${escapeHtml(annotation.purpose)}${annotation.note ? ` · ${escapeHtml(annotation.note)}` : ''}</small>` : ''}</span><select data-reassign-visit="${visit.id}"><option value="">Reassign to…</option>${placeOptions}</select></div>`;
+                }).join('')}</div>
                 <div class="suggestion-actions"><button id="splitPlaceButton">Preview and split selected visits</button></div>
+
+                <h4>Annotate selected visits</h4>
+                <p><small>The same selected visit checkboxes above are used for bulk annotation.</small></p>
+                <div class="place-editor-grid">
+                    <label>Purpose<select id="annotationPurpose"><option value="">Not set</option>${PlacesAnalytics.VISIT_PURPOSES.map(purpose => `<option>${purpose}</option>`).join('')}</select></label>
+                    <label>Activity<input id="annotationActivity" placeholder="Reading, lunch, shopping…"></label>
+                    <label>Satisfaction (1–5)<input id="annotationSatisfaction" type="number" min="1" max="5"></label>
+                    <label>Spending<input id="annotationSpending" type="number" min="0" step="0.01"></label>
+                    <label>Noise (1–5)<input id="annotationNoise" type="number" min="1" max="5"></label>
+                    <label>Crowding (1–5)<input id="annotationCrowding" type="number" min="1" max="5"></label>
+                    <label>Air-quality reading<input id="annotationAirQuality" type="number" step="0.1"></label>
+                    <label>Food or drink<input id="annotationFood" placeholder="Coffee, lunch…"></label>
+                    <label>People present<input id="annotationPeople" placeholder="Names, comma separated"></label>
+                    <label>Tags<input id="annotationTags" placeholder="quiet, productive…"></label>
+                    <label>Would return<select id="annotationReturn"><option value="">Not set</option><option value="true">Yes</option><option value="false">No</option></select></label>
+                    <label>Planned<select id="annotationPlanned"><option value="">Not set</option><option value="true">Yes</option><option value="false">No</option></select></label>
+                    <label>Detected place correct<select id="annotationCorrect"><option value="">Not set</option><option value="true">Yes</option><option value="false">No</option></select></label>
+                </div>
+                <label>Visit note<textarea id="annotationNote" rows="2"></textarea></label>
+                <div class="suggestion-actions"><button id="applyVisitAnnotations">Apply to selected visits</button></div>
+
+                <h4>Automatic rule for this place</h4>
+                <p><small>${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length} automatic rule${canonical.annotationRules.filter(rule => rule.placeId === profile.place.id).length === 1 ? '' : 's'} already saved for this place.</small></p>
+                <div class="place-editor-grid"><label>Minimum duration (minutes)<input id="annotationRuleDuration" type="number" min="0" value="30"></label><label>Purpose<select id="annotationRulePurpose">${PlacesAnalytics.VISIT_PURPOSES.map(purpose => `<option>${purpose}</option>`).join('')}</select></label></div>
+                <div class="suggestion-actions"><button id="saveAnnotationRule">Create rule</button></div>
             </section>`;
 
         const proposedBoundary = () => {
@@ -8084,6 +8120,57 @@ Departed: ${end}</description>
             await appendPlaceCorrection({ type: 'reassign-visit', visitId: event.target.dataset.reassignVisit, placeId: event.target.value });
             await showIntelligenceView();
         }));
+        document.getElementById('applyVisitAnnotations').addEventListener('click', async () => {
+            const visitIds = [...panel.querySelectorAll('[data-split-visit]:checked')].map(input => input.dataset.splitVisit);
+            if (!visitIds.length) { alert('Select at least one visit above to annotate.'); return; }
+            const optionalNumber = id => {
+                const value = document.getElementById(id).value.trim();
+                return value === '' ? null : Number(value);
+            };
+            const optionalBoolean = id => {
+                const value = document.getElementById(id).value;
+                return value === '' ? null : value === 'true';
+            };
+            const commaValues = id => document.getElementById(id).value.split(',').map(value => value.trim()).filter(Boolean);
+            const existingByVisit = new Map(canonical.annotations.map(annotation => [annotation.visitId, annotation]));
+            for (const visitId of visitIds) {
+                const existing = existingByVisit.get(visitId);
+                await PlacesAnalytics.placesPersistence.putAnnotation({
+                    id: existing?.id || `annotation_${visitId}`,
+                    visitId,
+                    purpose: document.getElementById('annotationPurpose').value || null,
+                    activity: document.getElementById('annotationActivity').value.trim() || null,
+                    satisfaction: optionalNumber('annotationSatisfaction'),
+                    noise: optionalNumber('annotationNoise'),
+                    crowding: optionalNumber('annotationCrowding'),
+                    airQuality: optionalNumber('annotationAirQuality'),
+                    spending: optionalNumber('annotationSpending'),
+                    foodAndDrink: commaValues('annotationFood'),
+                    people: commaValues('annotationPeople'),
+                    note: document.getElementById('annotationNote').value.trim(),
+                    tags: commaValues('annotationTags'),
+                    wouldReturn: optionalBoolean('annotationReturn'),
+                    planned: optionalBoolean('annotationPlanned'),
+                    detectedPlaceCorrect: optionalBoolean('annotationCorrect'),
+                });
+            }
+            await showIntelligenceView();
+        });
+        document.getElementById('saveAnnotationRule').addEventListener('click', async () => {
+            const minimumMinutes = Number(document.getElementById('annotationRuleDuration').value);
+            const purpose = document.getElementById('annotationRulePurpose').value;
+            if (!Number.isFinite(minimumMinutes) || minimumMinutes < 0 || !purpose) { alert('Choose a valid minimum duration and purpose.'); return; }
+            await PlacesAnalytics.placesPersistence.putAnnotationRule({
+                id: `rule_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`}`,
+                name: `${profile.place.name} over ${minimumMinutes} min → ${purpose}`,
+                enabled: true,
+                placeId: profile.place.id,
+                minimumDurationMs: minimumMinutes * 60 * 1000,
+                maximumDurationMs: null,
+                set: { purpose },
+            });
+            await showIntelligenceView();
+        });
     }
 
     function replayPointProjector(plan) {
