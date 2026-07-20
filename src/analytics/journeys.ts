@@ -46,6 +46,9 @@ export interface WalkingAnalytics {
   routeNoveltyPercent: number | null;
   percentagePreviouslyTravelled: number | null;
   mostSimilarWalks: Array<{ journeyId: string; similarityPercent: number }>;
+  startingElevationMeters: number | null;
+  endingElevationMeters: number | null;
+  elevationGainMeters: number | null;
 }
 
 export interface PublicTransportAnalytics {
@@ -54,6 +57,7 @@ export interface PublicTransportAnalytics {
   waitingTimeMs: number | null;
   timeAboardMs: number | null;
   transferCount: number | null;
+  transferTimeMs: number | null;
   likelyService: string | null;
   confidence: number;
   explanation: string;
@@ -147,6 +151,12 @@ export function buildWalkingAnalytics(journey: Journey, previousJourneys: readon
   const previouslyTravelled = new Set(previousJourneys.filter(other => other.id !== journey.id && /WALK|ON_FOOT/i.test(other.travelMode)).flatMap(other => [...routeCells(other)]));
   const reused = [...currentCells].filter(cell => previouslyTravelled.has(cell)).length;
   const previousPercent = currentCells.size ? reused / currentCells.size * 100 : null;
+  const elevations = journey.path.flatMap(point => point.coordinates.altitudeMeters === undefined ? [] : [point.coordinates.altitudeMeters]);
+  const elevationGain = journey.path.slice(1).reduce((sum, point, index) => {
+    const previous = journey.path[index]?.coordinates.altitudeMeters;
+    const current = point.coordinates.altitudeMeters;
+    return previous === undefined || current === undefined ? sum : sum + Math.max(0, current - previous);
+  }, 0);
   return {
     distanceMeters: distance,
     durationMs: duration,
@@ -158,6 +168,9 @@ export function buildWalkingAnalytics(journey: Journey, previousJourneys: readon
     routeNoveltyPercent: previousPercent === null ? null : 100 - previousPercent,
     percentagePreviouslyTravelled: previousPercent,
     mostSimilarWalks: comparable.slice(0, 3),
+    startingElevationMeters: elevations[0] ?? null,
+    endingElevationMeters: elevations.at(-1) ?? null,
+    elevationGainMeters: elevations.length >= 2 ? elevationGain : null,
   };
 }
 
@@ -167,12 +180,16 @@ export function buildPublicTransportAnalytics(journey: Journey, allJourneys: rea
   const placeIds = new Set(places.map(place => place.id));
   const confidence = scoreJourney(journey).score;
   const sameRouteCount = allJourneys.filter(other => other.id !== journey.id && other.startPlaceId === journey.startPlaceId && other.endPlaceId === journey.endPlaceId && other.travelMode === journey.travelMode).length;
+  const priorTransit = [...allJourneys].filter(other => other.id !== journey.id && other.interval.end && journey.interval.start && other.interval.end <= journey.interval.start && /(BUS|TRAIN|RAIL|TRAM|SUBWAY|TRANSIT|FERRY)/i.test(other.travelMode)).sort((a, b) => b.interval.end!.localeCompare(a.interval.end!))[0];
+  const transferTimeMs = priorTransit?.interval.end && journey.interval.start ? Date.parse(journey.interval.start) - Date.parse(priorTransit.interval.end) : null;
+  const plausibleTransfer = transferTimeMs !== null && transferTimeMs >= 0 && transferTimeMs <= 60 * 60_000 && (priorTransit?.endPlaceId === journey.startPlaceId || !priorTransit?.endPlaceId || !journey.startPlaceId);
   return {
     likelyBoardingPlaceId: journey.startPlaceId && placeIds.has(journey.startPlaceId) ? journey.startPlaceId : null,
     likelyAlightingPlaceId: journey.endPlaceId && placeIds.has(journey.endPlaceId) ? journey.endPlaceId : null,
     waitingTimeMs: null,
     timeAboardMs: durationMs,
-    transferCount: 0,
+    transferCount: plausibleTransfer ? 1 : 0,
+    transferTimeMs: plausibleTransfer ? transferTimeMs : null,
     likelyService: null,
     confidence: Math.min(confidence, journey.startPlaceId && journey.endPlaceId ? 85 : 60),
     explanation: sameRouteCount ? `This origin, destination and mode recur in ${sameRouteCount} other journeys; no exact service is claimed.` : "The mode is recorded, but there is not enough evidence to identify an exact service.",

@@ -32,12 +32,14 @@ describe("journey analytics", () => {
     expect(metrics?.pauseCount).toBe(1);
     expect(metrics?.percentagePreviouslyTravelled).toBe(100);
     expect(metrics?.mostSimilarWalks[0]?.journeyId).toBe("old");
+    expect(metrics?.startingElevationMeters).toBeNull();
   });
 
   it("does not overclaim an exact public transport service", () => {
     const train = { ...walking, id: "train", travelMode: "TRAIN" };
     const metrics = buildPublicTransportAnalytics(train, [], []);
     expect(metrics?.likelyService).toBeNull();
+    expect(metrics?.transferCount).toBe(0);
     expect(metrics?.explanation).toContain("not enough evidence");
   });
 });

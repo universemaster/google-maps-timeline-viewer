@@ -8358,6 +8358,10 @@ Departed: ${end}</description>
             ['Longest gap', formatAnalyticsDuration(quality.gaps.maximum)],
             ['Overlapping visits', summary.overlappingVisits.toLocaleString()],
             ['Impossible speeds', summary.impossibleSpeedEvents.toLocaleString()],
+            ['Teleportation events', summary.teleportationEvents.toLocaleString()],
+            ['Implausible distances', summary.implausibleDistanceJourneys.toLocaleString()],
+            ['Timezone anomalies', summary.timezoneAnomalies.toLocaleString()],
+            ['Low-confidence events', (summary.lowConfidenceVisits + summary.lowConfidenceJourneys).toLocaleString()],
             ['Duplicate places nearby', quality.duplicatePlaceCandidates.length.toLocaleString()],
             ['Missing coordinates', summary.invalidOrMissingCoordinates.toLocaleString()],
             ['Latest data', summary.mostRecentImportedDataDate ? formatTimestamp(summary.mostRecentImportedDataDate, 'D MMM YYYY') : '—'],
@@ -8406,10 +8410,13 @@ Departed: ${end}</description>
                 <tr><td>Fastest sustained pace</td><td>${walking.fastestSustainedPaceMinutesPerKilometre === null ? '—' : `${walking.fastestSustainedPaceMinutesPerKilometre.toFixed(1)} min/km`}</td></tr>
                 <tr><td>Route novelty</td><td>${walking.routeNoveltyPercent === null ? 'No earlier route to compare' : `${walking.routeNoveltyPercent.toFixed(0)}% new`}</td></tr>
                 <tr><td>Longest pause</td><td>${formatAnalyticsDuration(walking.longestPauseMs)}</td></tr>
+                <tr><td>Start / end elevation</td><td>${walking.startingElevationMeters === null ? '—' : `${walking.startingElevationMeters.toFixed(0)} m / ${walking.endingElevationMeters.toFixed(0)} m`}</td></tr>
+                <tr><td>Elevation gain</td><td>${walking.elevationGainMeters === null ? '—' : `${walking.elevationGainMeters.toFixed(0)} m`}</td></tr>
             </table>` : ''}
             ${transit ? `<h4>Public transport inference</h4><p>${escapeHtml(transit.explanation)}</p><table class="profile-table">
                 <tr><td>Likely boarding / alighting</td><td>${escapeHtml(placeName(transit.likelyBoardingPlaceId))} / ${escapeHtml(placeName(transit.likelyAlightingPlaceId))}</td></tr>
                 <tr><td>Time aboard</td><td>${formatAnalyticsDuration(transit.timeAboardMs)}</td></tr>
+                <tr><td>Transfers / transfer time</td><td>${transit.transferCount ?? '—'} / ${formatAnalyticsDuration(transit.transferTimeMs)}</td></tr>
                 <tr><td>Inference confidence</td><td>${transit.confidence}/100</td></tr>
             </table>` : ''}`;
     }

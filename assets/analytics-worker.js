@@ -5636,6 +5636,16 @@
       const duration = durationMilliseconds(journey.interval.start, journey.interval.end);
       return Boolean(duration && journey.distanceMeters && journey.distanceMeters / duration * 3600 > 350);
     }).length;
+    const ordered = [...visits, ...journeys].filter((event) => event.interval.start && event.interval.end).sort((a2, b2) => a2.interval.start.localeCompare(b2.interval.start));
+    let teleportationEvents = 0;
+    for (let index = 1; index < ordered.length; index += 1) {
+      const prior = ordered[index - 1];
+      const current = ordered[index];
+      const from = eventCoordinates(prior, "end");
+      const to2 = eventCoordinates(current, "start");
+      const elapsed = Date.parse(current.interval.start) - Date.parse(prior.interval.end);
+      if (from && to2 && elapsed > 0 && haversineMeters(from, to2) / elapsed * 3600 > 1e3) teleportationEvents += 1;
+    }
     const timestamps = [...visits, ...journeys].flatMap((event) => [event.interval.start, event.interval.end]).filter((value) => value !== null).sort();
     return {
       visits: visits.length,
@@ -5646,6 +5656,11 @@
       unknownPlaces: visits.filter((visit) => !placeById.has(visit.placeId) || placeById.get(visit.placeId)?.name === "Unknown place").length,
       uncertainTravelModes: journeys.filter((journey) => journey.travelMode === "UNKNOWN").length,
       impossibleSpeedEvents,
+      teleportationEvents,
+      implausibleDistanceJourneys: journeys.filter((journey) => (journey.distanceMeters ?? 0) > 2e6).length,
+      timezoneAnomalies: [...visits, ...journeys].filter((event) => event.interval.start && event.interval.end && (!Number.isFinite(Date.parse(event.interval.start)) || !Number.isFinite(Date.parse(event.interval.end)) || Date.parse(event.interval.end) < Date.parse(event.interval.start))).length,
+      lowConfidenceVisits: visits.filter((visit) => scoreVisit(visit).score < 60).length,
+      lowConfidenceJourneys: journeys.filter((journey) => scoreJourney(journey).score < 60).length,
       duplicateRecords,
       visitConfidence: summarizeDistribution(visits.map((visit) => scoreVisit(visit).score)),
       journeyConfidence: summarizeDistribution(journeys.map((journey) => scoreJourney(journey).score)),

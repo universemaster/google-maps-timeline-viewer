@@ -61,6 +61,8 @@ describe("explainable confidence and quality", () => {
     expect(scoreJourney(impossible).components.map(component => component.code)).toContain("implausible-speed");
     const quality = buildDataQualitySummary(places, [visit("v", "cafe", "2026-07-01T10:00:00Z", "2026-07-01T11:00:00Z")], [impossible]);
     expect(quality.impossibleSpeedEvents).toBe(1);
+    expect(quality.implausibleDistanceJourneys).toBe(0);
+    expect(quality.teleportationEvents).toBe(0);
     expect(quality.visitConfidence.count).toBe(1);
     expect(quality.journeyConfidence.count).toBe(1);
   });

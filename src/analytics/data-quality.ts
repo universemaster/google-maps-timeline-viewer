@@ -16,6 +16,11 @@ export interface DataQualitySummary {
   unknownPlaces: number;
   uncertainTravelModes: number;
   impossibleSpeedEvents: number;
+  teleportationEvents: number;
+  implausibleDistanceJourneys: number;
+  timezoneAnomalies: number;
+  lowConfidenceVisits: number;
+  lowConfidenceJourneys: number;
   duplicateRecords: number;
   visitConfidence: ReturnType<typeof summarizeDistribution>;
   journeyConfidence: ReturnType<typeof summarizeDistribution>;
@@ -186,6 +191,16 @@ export function buildDataQualitySummary(places: readonly Place[], visits: readon
     const duration = durationMilliseconds(journey.interval.start, journey.interval.end);
     return Boolean(duration && journey.distanceMeters && journey.distanceMeters / duration * 3_600 > 350);
   }).length;
+  const ordered = [...visits, ...journeys].filter(event => event.interval.start && event.interval.end).sort((a, b) => a.interval.start!.localeCompare(b.interval.start!));
+  let teleportationEvents = 0;
+  for (let index = 1; index < ordered.length; index += 1) {
+    const prior = ordered[index - 1]!;
+    const current = ordered[index]!;
+    const from = eventCoordinates(prior, "end");
+    const to = eventCoordinates(current, "start");
+    const elapsed = Date.parse(current.interval.start!) - Date.parse(prior.interval.end!);
+    if (from && to && elapsed > 0 && haversineMeters(from, to) / elapsed * 3_600 > 1_000) teleportationEvents += 1;
+  }
   const timestamps = [...visits, ...journeys].flatMap(event => [event.interval.start, event.interval.end]).filter((value): value is string => value !== null).sort();
   return {
     visits: visits.length,
@@ -196,6 +211,11 @@ export function buildDataQualitySummary(places: readonly Place[], visits: readon
     unknownPlaces: visits.filter(visit => !placeById.has(visit.placeId) || placeById.get(visit.placeId)?.name === "Unknown place").length,
     uncertainTravelModes: journeys.filter(journey => journey.travelMode === "UNKNOWN").length,
     impossibleSpeedEvents,
+    teleportationEvents,
+    implausibleDistanceJourneys: journeys.filter(journey => (journey.distanceMeters ?? 0) > 2_000_000).length,
+    timezoneAnomalies: [...visits, ...journeys].filter(event => event.interval.start && event.interval.end && (!Number.isFinite(Date.parse(event.interval.start)) || !Number.isFinite(Date.parse(event.interval.end)) || Date.parse(event.interval.end) < Date.parse(event.interval.start))).length,
+    lowConfidenceVisits: visits.filter(visit => scoreVisit(visit).score < 60).length,
+    lowConfidenceJourneys: journeys.filter(journey => scoreJourney(journey).score < 60).length,
     duplicateRecords,
     visitConfidence: summarizeDistribution(visits.map(visit => scoreVisit(visit).score)),
     journeyConfidence: summarizeDistribution(journeys.map(journey => scoreJourney(journey).score)),

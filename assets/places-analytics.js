@@ -5923,6 +5923,16 @@ var PlacesAnalytics = (() => {
       const duration = durationMilliseconds(journey.interval.start, journey.interval.end);
       return Boolean(duration && journey.distanceMeters && journey.distanceMeters / duration * 3600 > 350);
     }).length;
+    const ordered = [...visits, ...journeys].filter((event) => event.interval.start && event.interval.end).sort((a2, b2) => a2.interval.start.localeCompare(b2.interval.start));
+    let teleportationEvents = 0;
+    for (let index = 1; index < ordered.length; index += 1) {
+      const prior = ordered[index - 1];
+      const current = ordered[index];
+      const from = eventCoordinates(prior, "end");
+      const to2 = eventCoordinates(current, "start");
+      const elapsed = Date.parse(current.interval.start) - Date.parse(prior.interval.end);
+      if (from && to2 && elapsed > 0 && haversineMeters(from, to2) / elapsed * 3600 > 1e3) teleportationEvents += 1;
+    }
     const timestamps = [...visits, ...journeys].flatMap((event) => [event.interval.start, event.interval.end]).filter((value) => value !== null).sort();
     return {
       visits: visits.length,
@@ -5933,6 +5943,11 @@ var PlacesAnalytics = (() => {
       unknownPlaces: visits.filter((visit) => !placeById.has(visit.placeId) || placeById.get(visit.placeId)?.name === "Unknown place").length,
       uncertainTravelModes: journeys.filter((journey) => journey.travelMode === "UNKNOWN").length,
       impossibleSpeedEvents,
+      teleportationEvents,
+      implausibleDistanceJourneys: journeys.filter((journey) => (journey.distanceMeters ?? 0) > 2e6).length,
+      timezoneAnomalies: [...visits, ...journeys].filter((event) => event.interval.start && event.interval.end && (!Number.isFinite(Date.parse(event.interval.start)) || !Number.isFinite(Date.parse(event.interval.end)) || Date.parse(event.interval.end) < Date.parse(event.interval.start))).length,
+      lowConfidenceVisits: visits.filter((visit) => scoreVisit(visit).score < 60).length,
+      lowConfidenceJourneys: journeys.filter((journey) => scoreJourney(journey).score < 60).length,
       duplicateRecords,
       visitConfidence: summarizeDistribution(visits.map((visit) => scoreVisit(visit).score)),
       journeyConfidence: summarizeDistribution(journeys.map((journey) => scoreJourney(journey).score)),
@@ -6402,6 +6417,12 @@ var PlacesAnalytics = (() => {
     const previouslyTravelled = new Set(previousJourneys.filter((other) => other.id !== journey.id && /WALK|ON_FOOT/i.test(other.travelMode)).flatMap((other) => [...routeCells(other)]));
     const reused = [...currentCells].filter((cell) => previouslyTravelled.has(cell)).length;
     const previousPercent = currentCells.size ? reused / currentCells.size * 100 : null;
+    const elevations = journey.path.flatMap((point) => point.coordinates.altitudeMeters === void 0 ? [] : [point.coordinates.altitudeMeters]);
+    const elevationGain = journey.path.slice(1).reduce((sum, point, index) => {
+      const previous = journey.path[index]?.coordinates.altitudeMeters;
+      const current = point.coordinates.altitudeMeters;
+      return previous === void 0 || current === void 0 ? sum : sum + Math.max(0, current - previous);
+    }, 0);
     return {
       distanceMeters: distance,
       durationMs: duration,
@@ -6412,7 +6433,10 @@ var PlacesAnalytics = (() => {
       pauseCount: metrics.pauses.length,
       routeNoveltyPercent: previousPercent === null ? null : 100 - previousPercent,
       percentagePreviouslyTravelled: previousPercent,
-      mostSimilarWalks: comparable.slice(0, 3)
+      mostSimilarWalks: comparable.slice(0, 3),
+      startingElevationMeters: elevations[0] ?? null,
+      endingElevationMeters: elevations.at(-1) ?? null,
+      elevationGainMeters: elevations.length >= 2 ? elevationGain : null
     };
   }
   function buildPublicTransportAnalytics(journey, allJourneys, places) {
@@ -6421,12 +6445,16 @@ var PlacesAnalytics = (() => {
     const placeIds = new Set(places.map((place) => place.id));
     const confidence = scoreJourney(journey).score;
     const sameRouteCount = allJourneys.filter((other) => other.id !== journey.id && other.startPlaceId === journey.startPlaceId && other.endPlaceId === journey.endPlaceId && other.travelMode === journey.travelMode).length;
+    const priorTransit = [...allJourneys].filter((other) => other.id !== journey.id && other.interval.end && journey.interval.start && other.interval.end <= journey.interval.start && /(BUS|TRAIN|RAIL|TRAM|SUBWAY|TRANSIT|FERRY)/i.test(other.travelMode)).sort((a2, b2) => b2.interval.end.localeCompare(a2.interval.end))[0];
+    const transferTimeMs = priorTransit?.interval.end && journey.interval.start ? Date.parse(journey.interval.start) - Date.parse(priorTransit.interval.end) : null;
+    const plausibleTransfer = transferTimeMs !== null && transferTimeMs >= 0 && transferTimeMs <= 60 * 6e4 && (priorTransit?.endPlaceId === journey.startPlaceId || !priorTransit?.endPlaceId || !journey.startPlaceId);
     return {
       likelyBoardingPlaceId: journey.startPlaceId && placeIds.has(journey.startPlaceId) ? journey.startPlaceId : null,
       likelyAlightingPlaceId: journey.endPlaceId && placeIds.has(journey.endPlaceId) ? journey.endPlaceId : null,
       waitingTimeMs: null,
       timeAboardMs: durationMs,
-      transferCount: 0,
+      transferCount: plausibleTransfer ? 1 : 0,
+      transferTimeMs: plausibleTransfer ? transferTimeMs : null,
       likelyService: null,
       confidence: Math.min(confidence, journey.startPlaceId && journey.endPlaceId ? 85 : 60),
       explanation: sameRouteCount ? `This origin, destination and mode recur in ${sameRouteCount} other journeys; no exact service is claimed.` : "The mode is recorded, but there is not enough evidence to identify an exact service."
