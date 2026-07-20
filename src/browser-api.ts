@@ -11,3 +11,4 @@ export { discoverPlaces, DEFAULT_PLACE_DISCOVERY_SETTINGS } from "./analytics/pl
 export { applyCorrections } from "./model/corrections.js";
 export { placesPersistence } from "./persistence/database.js";
 export { pointInsideBoundary, previewBoundaryChange } from "./analytics/boundaries.js";
+export { buildJourneyAnalytics, buildWalkingAnalytics, buildPublicTransportAnalytics } from "./analytics/journeys.js";

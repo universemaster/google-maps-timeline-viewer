@@ -227,7 +227,11 @@ function normalizeTimelineObjects(
         interval: journeyInterval,
         travelMode: string(activity.activityType) ?? string(waypoints?.travelMode) ?? "UNKNOWN",
         distanceMeters: number(activity.distance) ?? number(simplified?.distanceMeters) ?? number(waypoints?.distanceMeters),
-        path: rawPoints.map(point => coordinatesFromObject(point)).filter((coords): coords is Coordinates => coords !== null).map(coords => ({ at: null, coordinates: coords })),
+        path: rawPoints.flatMap(point => {
+          const item = record(point);
+          const coordinates = coordinatesFromObject(point);
+          return coordinates ? [{ at: string(item?.timestamp) ?? string(item?.time) ?? null, coordinates }] : [];
+        }),
         confidence: null,
         source,
         annotationId: null,
