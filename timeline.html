@@ -1842,6 +1842,11 @@
                     <div><h4>Confidence distribution</h4><div id="qualityConfidenceBars"></div></div>
                     <div><h4>Issues worth reviewing</h4><div id="qualityIssueList"></div></div>
                 </div>
+                <div class="quality-columns">
+                    <div><h4>Gap duration distribution</h4><div id="qualityGapBars"></div><h4>Unknown places over time</h4><div id="qualityUnknownOverTime"></div></div>
+                    <div><h4>Tracking quality by imported source</h4><div id="qualitySourceTable"></div><h4>Likely duplicate places</h4><div id="qualityDuplicatePlaces"></div></div>
+                </div>
+                <h4>Impossible-speed and teleportation events</h4><svg id="qualityIssueMap" viewBox="0 0 1000 220" preserveAspectRatio="none" class="replay-stage" aria-label="Map of implausible movement events"></svg>
             </section>
             <section class="intelligence-panel" style="margin-bottom:18px">
                 <div class="intelligence-header"><div><h3>Suggested places</h3><p>Repeated dwell clusters that are not represented by a well-defined saved place.</p></div></div>
@@ -8452,6 +8457,25 @@ Departed: ${end}</description>
         document.getElementById('qualityConfidenceBars').innerHTML = buckets.map(([label, count]) => `<div class="quality-bar-row"><span>${label}</span><div class="quality-bar-track"><div class="quality-bar-fill" style="width:${count / maximum * 100}%"></div></div><strong>${count}</strong></div>`).join('');
         const issueRows = quality.issues.slice(0, 20);
         document.getElementById('qualityIssueList').innerHTML = issueRows.length ? issueRows.map(issue => `<div class="quality-issue" data-severity="${issue.severity}"><strong>${escapeHtml(issue.description)}</strong><br><small>${issue.at ? formatTimestamp(issue.at, 'D MMM YYYY, HH:mm') : 'No timestamp'} · ${issue.severity} confidence risk</small></div>`).join('') : '<p>No high-signal problems were found in these imported records.</p>';
+        const gapBuckets = [['Under 15 min', 0, 15 * 60000], ['15–60 min', 15 * 60000, 60 * 60000], ['1–4 hours', 60 * 60000, 4 * 3600000], ['4–12 hours', 4 * 3600000, 12 * 3600000], ['12+ hours', 12 * 3600000, Infinity]].map(([label, minimum, maximum]) => [label, quality.gapDurationsMs.filter(value => value >= minimum && value < maximum).length]);
+        const gapMaximum = Math.max(1, ...gapBuckets.map(([, count]) => count));
+        document.getElementById('qualityGapBars').innerHTML = gapBuckets.map(([label, count]) => `<div class="quality-bar-row"><span>${label}</span><div class="quality-bar-track"><div class="quality-bar-fill" style="width:${count / gapMaximum * 100}%"></div></div><strong>${count}</strong></div>`).join('');
+        document.getElementById('qualityUnknownOverTime').innerHTML = quality.unknownPlacesByYear.length ? quality.unknownPlacesByYear.map(row => `<p><strong>${row.year}</strong> · ${row.visits} unknown visit${row.visits === 1 ? '' : 's'}</p>`).join('') : '<p>No unknown-place trend was detected.</p>';
+        document.getElementById('qualitySourceTable').innerHTML = `<table class="profile-table"><thead><tr><th>Source</th><th>Events</th><th>Mean confidence</th></tr></thead><tbody>${quality.trackingQualityBySource.map(row => `<tr><td>${escapeHtml(row.sourceName)}</td><td>${row.events}</td><td>${row.meanConfidence.toFixed(1)}/100</td></tr>`).join('')}</tbody></table>`;
+        const placeById = new Map(canonical.places.map(place => [place.id, place]));
+        document.getElementById('qualityDuplicatePlaces').innerHTML = quality.duplicatePlaceCandidates.length ? quality.duplicatePlaceCandidates.slice(0, 20).map(row => `<p>${escapeHtml(placeById.get(row.leftPlaceId)?.name || 'Unknown')} ↔ ${escapeHtml(placeById.get(row.rightPlaceId)?.name || 'Unknown')} · ${Math.round(row.distanceMeters)} m</p>`).join('') : '<p>No nearby duplicate candidates.</p>';
+        const issuePoints = quality.issues.filter(issue => ['impossible-speed', 'teleportation'].includes(issue.code)).flatMap(issue => {
+            const journey = canonical.journeys.find(item => item.id === issue.entityId);
+            const point = journey?.path[Math.floor((journey.path.length - 1) / 2)]?.coordinates;
+            return point ? [{ issue, point }] : [];
+        });
+        const latitudes = issuePoints.map(row => row.point.latitude); const longitudes = issuePoints.map(row => row.point.longitude);
+        const minimumLatitude = Math.min(...latitudes); const maximumLatitude = Math.max(...latitudes); const minimumLongitude = Math.min(...longitudes); const maximumLongitude = Math.max(...longitudes);
+        document.getElementById('qualityIssueMap').innerHTML = issuePoints.length ? issuePoints.map(row => {
+            const x = 25 + (row.point.longitude - minimumLongitude) / Math.max(0.000001, maximumLongitude - minimumLongitude) * 950;
+            const y = 195 - (row.point.latitude - minimumLatitude) / Math.max(0.000001, maximumLatitude - minimumLatitude) * 170;
+            return `<circle cx="${x}" cy="${y}" r="9" fill="${row.issue.code === 'teleportation' ? '#b91c1c' : '#d97706'}"><title>${escapeHtml(row.issue.description)}</title></circle>`;
+        }).join('') : '<text x="500" y="115" text-anchor="middle" fill="#64748b">No mapped impossible-speed or teleportation events</text>';
     }
 
     function renderJourneyDetail(journey, canonical) {

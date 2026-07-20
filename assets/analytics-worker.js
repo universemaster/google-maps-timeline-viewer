@@ -5630,7 +5630,7 @@
     const summary = buildDataQualitySummary(places, visits, journeys);
     const timestamps = [...visits, ...journeys].flatMap((event) => [event.interval.start, event.interval.end]).filter((value) => value !== null).sort();
     if (timestamps.length === 0) {
-      return { summary, selectedRangeCoveragePercent: 0, dailyCoverage: [], gaps: summarizeDistribution([]), issues: [], duplicatePlaceCandidates: [], ageOfImportedDataMs: null, trackingQualityBySource: [] };
+      return { summary, selectedRangeCoveragePercent: 0, dailyCoverage: [], gaps: summarizeDistribution([]), gapDurationsMs: [], issues: [], duplicatePlaceCandidates: [], ageOfImportedDataMs: null, trackingQualityBySource: [], unknownPlacesByYear: [] };
     }
     const firstDate = qi.PlainDate.from(localParts(timestamps[0], timeZone).date);
     const lastDate = qi.PlainDate.from(localParts(timestamps.at(-1), timeZone).date);
@@ -5696,15 +5696,23 @@
     journeys.forEach((journey) => sourceScores.set(journey.source.sourceName, [...sourceScores.get(journey.source.sourceName) ?? [], scoreJourney(journey).score]));
     const totalCovered = dailyCoverage.reduce((sum, day) => sum + day.coveredMs, 0);
     const totalAvailable = dailyCoverage.reduce((sum, day) => sum + day.dayLengthMs, 0);
+    const placeById = new Map(places.map((place) => [place.id, place]));
+    const unknownByYear = /* @__PURE__ */ new Map();
+    visits.filter((visit) => visit.interval.start && (!placeById.has(visit.placeId) || /^unknown/i.test(placeById.get(visit.placeId)?.name ?? ""))).forEach((visit) => {
+      const year = localParts(visit.interval.start, timeZone).year;
+      unknownByYear.set(year, (unknownByYear.get(year) ?? 0) + 1);
+    });
     return {
       summary,
       selectedRangeCoveragePercent: totalAvailable ? totalCovered / totalAvailable * 100 : 0,
       dailyCoverage,
       gaps: summarizeDistribution(allGaps),
+      gapDurationsMs: allGaps,
       issues: issues.sort((left, right) => (right.at ?? "").localeCompare(left.at ?? "")),
       duplicatePlaceCandidates: duplicatePlaceCandidates.sort((left, right) => left.distanceMeters - right.distanceMeters),
       ageOfImportedDataMs: Math.max(0, now - Date.parse(timestamps.at(-1))),
-      trackingQualityBySource: [...sourceScores.entries()].map(([sourceName, scores]) => ({ sourceName, events: scores.length, meanConfidence: scores.reduce((sum, score) => sum + score, 0) / scores.length }))
+      trackingQualityBySource: [...sourceScores.entries()].map(([sourceName, scores]) => ({ sourceName, events: scores.length, meanConfidence: scores.reduce((sum, score) => sum + score, 0) / scores.length })),
+      unknownPlacesByYear: [...unknownByYear.entries()].map(([year, count]) => ({ year, visits: count })).sort((a2, b2) => a2.year - b2.year)
     };
   }
   function buildDataQualitySummary(places, visits, journeys) {
