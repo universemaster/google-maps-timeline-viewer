@@ -1795,6 +1795,7 @@
                 <div><h2>Places intelligence</h2><p id="intelligenceScope">Your selected day and long-term place patterns</p></div>
                 <button id="closeIntelligenceBtn" class="control-btn">Back to map</button>
             </div>
+            <div id="analyticsProgress" class="quality-issue" style="display:none"><strong id="analyticsProgressStage">Preparing analysis</strong><br><progress id="analyticsProgressBar" max="100" value="0" style="width:min(520px,80%)"></progress> <button id="cancelAnalytics" class="control-btn">Cancel</button></div>
             <section id="dailyIntelligenceCards" class="intelligence-grid"></section>
             <section class="intelligence-panel replay-panel">
                 <div class="intelligence-header"><div><h3>Daily movement replay</h3><p>Replay visits and journeys using only your imported history.</p></div></div>
@@ -8322,8 +8323,8 @@ Departed: ${end}</description>
         container.innerHTML = `<strong>Compared with ${moment(compareDate).format('D MMM YYYY')}</strong> · outside ${signedDuration(selected.timeOutsideHomeMs - comparison.timeOutsideHomeMs)}, distance ${selected.totalDistanceMeters - comparison.totalDistanceMeters >= 0 ? '+' : '−'}${formatDistance(Math.abs(selected.totalDistanceMeters - comparison.totalDistanceMeters))}, places ${selected.placesVisited - comparison.placesVisited >= 0 ? '+' : ''}${selected.placesVisited - comparison.placesVisited}`;
     }
 
-    function renderDataQuality(canonical, timeZone) {
-        const quality = PlacesAnalytics.buildDataQualityDashboard(canonical.places, canonical.visits, canonical.journeys, timeZone, Date.now());
+    function renderDataQuality(canonical, timeZone, preparedQuality = null) {
+        const quality = preparedQuality || PlacesAnalytics.buildDataQualityDashboard(canonical.places, canonical.visits, canonical.journeys, timeZone, Date.now());
         const summary = quality.summary;
         const cards = [
             ['Range coverage', `${quality.selectedRangeCoveragePercent.toFixed(1)}%`],
@@ -8409,18 +8410,70 @@ Departed: ${end}</description>
         return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
     }
 
-    function renderRoutineAnalysis(canonical, timeZone, selectedDate) {
-        const routine = PlacesAnalytics.buildRoutineAnalysis(timeZone, canonical.places, canonical.visits, canonical.journeys);
+    function renderRoutineAnalysis(canonical, timeZone, selectedDate, prepared = null) {
+        const routine = prepared?.routine || PlacesAnalytics.buildRoutineAnalysis(timeZone, canonical.places, canonical.visits, canonical.journeys);
         const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
         const placeById = new Map(canonical.places.map(place => [place.id, place]));
         document.getElementById('routineWeekTable').innerHTML = `<table class="profile-table"><thead><tr><th>Day</th><th>Usually leave</th><th>Usually return</th><th>Time outside</th><th>Places</th><th>Days sampled</th></tr></thead><tbody>${routine.weekdays.map(row => `<tr><td>${dayNames[row.dayOfWeek - 1]}</td><td>${formatMinuteOfDay(row.departureMinute.p25)}–${formatMinuteOfDay(row.departureMinute.p75)}<br><small>median ${formatMinuteOfDay(row.departureMinute.median)}</small></td><td>${formatMinuteOfDay(row.returnMinute.p25)}–${formatMinuteOfDay(row.returnMinute.p75)}<br><small>median ${formatMinuteOfDay(row.returnMinute.median)}</small></td><td>${formatAnalyticsDuration(row.timeOutsideHomeMs.p25)}–${formatAnalyticsDuration(row.timeOutsideHomeMs.p75)}</td><td>${row.placesVisited.median === null ? '—' : Number(row.placesVisited.median).toFixed(1)}</td><td>${row.observations}</td></tr>`).join('')}</tbody></table>`;
         document.getElementById('routineSequences').innerHTML = routine.overall.commonSequences.length ? routine.overall.commonSequences.map(sequence => `<p>${sequence.placeIds.map(id => escapeHtml(placeById.get(id)?.name || 'Unknown')).join(' → ')} <small>(${sequence.count} days)</small></p>`).join('') : '<p>Not enough repeated sequences yet.</p>';
         const selectedFindings = PlacesAnalytics.detectDayAnomalies(selectedDate, routine);
         document.getElementById('selectedDayAnomalies').innerHTML = selectedFindings.length ? `<div class="quality-issue warning"><strong>${selectedFindings.length} unusual feature${selectedFindings.length === 1 ? '' : 's'} on the selected day</strong>${selectedFindings.map(item => `<p>${escapeHtml(item.title)} · ${escapeHtml(item.explanation)} Confidence ${Math.round(item.confidence)}/100.</p>`).join('')}</div>` : '<p class="quality-issue good"><strong>Selected day looks typical</strong><br>No metric fell into the outer 10% of at least four earlier matching weekdays.</p>';
-        const findings = PlacesAnalytics.detectAllAnomalies(timeZone, routine, canonical.places, canonical.visits, canonical.journeys);
+        const findings = prepared?.anomalies ? [...prepared.anomalies] : PlacesAnalytics.detectAllAnomalies(timeZone, routine, canonical.places, canonical.visits, canonical.journeys);
         const interestingness = item => ({ extreme: 300, unusual: 200, notable: 100 }[item.severity] || 0) + item.confidence + Math.abs(item.percentileRank - 50);
         findings.sort((a, b) => interestingness(b) - interestingness(a) || b.date.localeCompare(a.date));
         document.getElementById('anomalyFeed').innerHTML = findings.length ? findings.slice(0, 24).map(item => `<article class="suggestion-card"><div class="suggestion-heading"><div><strong>${escapeHtml(item.title)}</strong><br><small>${moment(item.date).format('D MMMM YYYY')} · ${item.severity}</small></div><span class="confidence-badge">${Math.round(item.confidence)}/100</span></div><p>${escapeHtml(item.explanation)}</p><p><small>Compared with: ${item.comparableDates.map(date => moment(date).format('D MMM YYYY')).join(', ') || 'no earlier examples'}</small></p></article>`).join('') : '<p>No robust anomaly findings yet. At least five comparable historical events are needed for event-level findings.</p>';
+    }
+
+    let activeAnalyticsWorker = null;
+
+    function cancelActiveAnalytics() {
+        if (!activeAnalyticsWorker) return;
+        activeAnalyticsWorker.worker.terminate();
+        activeAnalyticsWorker.reject(new DOMException('Analysis cancelled', 'AbortError'));
+        activeAnalyticsWorker = null;
+        document.getElementById('analyticsProgressStage').textContent = 'Analysis cancelled';
+        document.getElementById('analyticsProgressBar').value = 0;
+    }
+
+    async function loadPreparedIntelligence(canonical, timeZone) {
+        const revision = Math.max(0, ...(canonical.corrections || []).map(command => Number(command.revision) || 0));
+        const key = PlacesAnalytics.buildAnalyticsCacheKey(canonical, 'intelligence', { timeZone }, revision);
+        const cached = await PlacesAnalytics.placesPersistence.getCache(key);
+        const progress = document.getElementById('analyticsProgress');
+        const stage = document.getElementById('analyticsProgressStage');
+        const bar = document.getElementById('analyticsProgressBar');
+        progress.style.display = 'block';
+        if (cached?.analyticsVersion === PlacesAnalytics.ANALYTICS_VERSION) {
+            stage.textContent = 'Loaded cached analysis'; bar.value = 100;
+            setTimeout(() => { if (stage.textContent === 'Loaded cached analysis') progress.style.display = 'none'; }, 1200);
+            return cached.value;
+        }
+        if (activeAnalyticsWorker) cancelActiveAnalytics();
+        if (typeof Worker === 'undefined') {
+            stage.textContent = 'Calculating in this browser'; bar.value = 10;
+            const result = await PlacesAnalytics.calculateIntelligenceJob({ timeline: canonical, timeZone }, update => { stage.textContent = update.stage; bar.value = update.progress * 100; });
+            await PlacesAnalytics.placesPersistence.putCache({ key, value: result, createdAt: new Date().toISOString(), analyticsVersion: PlacesAnalytics.ANALYTICS_VERSION });
+            progress.style.display = 'none';
+            return result;
+        }
+        stage.textContent = 'Starting background analysis'; bar.value = 0;
+        const id = `analytics_${crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
+        const result = await new Promise((resolve, reject) => {
+            const worker = new Worker('assets/analytics-worker.js');
+            activeAnalyticsWorker = { worker, reject, id };
+            worker.onmessage = event => {
+                if (event.data?.id !== id) return;
+                if (event.data.type === 'progress') { stage.textContent = event.data.stage; bar.value = event.data.progress * 100; }
+                if (event.data.type === 'result') { worker.terminate(); activeAnalyticsWorker = null; resolve(event.data.result); }
+                if (event.data.type === 'error') { worker.terminate(); activeAnalyticsWorker = null; reject(new Error(event.data.message)); }
+            };
+            worker.onerror = event => { worker.terminate(); activeAnalyticsWorker = null; reject(new Error(event.message || 'Analytics worker failed')); };
+            worker.postMessage({ type: 'run', id, input: { timeline: canonical, timeZone } });
+        });
+        await PlacesAnalytics.placesPersistence.putCache({ key, value: result, createdAt: new Date().toISOString(), analyticsVersion: PlacesAnalytics.ANALYTICS_VERSION });
+        stage.textContent = 'Analysis ready'; bar.value = 100;
+        setTimeout(() => { if (stage.textContent === 'Analysis ready') progress.style.display = 'none'; }, 800);
+        return result;
     }
 
     function percentageDifference(value) {
@@ -8657,10 +8710,8 @@ Departed: ${end}</description>
         }));
         if (profiles.length) list.querySelector('.place-analysis-row')?.click();
         loadReplay(canonical, selectedDate, timeZone);
-        renderDataQuality(canonical, timeZone);
         await renderSuggestedPlaces(canonical, timeZone);
         renderJourneyAnalytics(canonical);
-        renderRoutineAnalysis(canonical, timeZone, selectedDate);
         renderPeriodSummary(canonical, timeZone);
         renderComparisons(canonical, timeZone);
         hydrateAdvancedSearch(canonical);
@@ -8673,11 +8724,22 @@ Departed: ${end}</description>
             document.getElementById('show-map-btn')?.classList.add('active');
             document.getElementById('show-sidebar-btn')?.classList.remove('active');
         }
+        try {
+            const prepared = await loadPreparedIntelligence(canonical, timeZone);
+            renderDataQuality(canonical, timeZone, prepared.dataQuality);
+            renderRoutineAnalysis(canonical, timeZone, selectedDate, prepared);
+        } catch (error) {
+            if (error?.name !== 'AbortError') {
+                console.error('Background analysis failed:', error);
+                document.getElementById('analyticsProgressStage').textContent = 'Background analysis failed; basic views remain available.';
+            }
+        }
     }
 
     function initIntelligenceView() {
         initReplayControls();
         hydrateDiscoverySettings();
+        document.getElementById('cancelAnalytics').addEventListener('click', cancelActiveAnalytics);
         document.getElementById('refreshSuggestions').addEventListener('click', () => replayController && renderSuggestedPlaces(replayController.canonical, replayController.timeZone));
         document.getElementById('discoveryEnvironment').addEventListener('change', event => {
             const radiusByEnvironment = { urban: 30, suburban: 50, rural: 75 };
@@ -8685,6 +8747,7 @@ Departed: ${end}</description>
         });
         document.getElementById('intelligenceBtn').addEventListener('click', () => void showIntelligenceView());
         document.getElementById('closeIntelligenceBtn').addEventListener('click', () => {
+            cancelActiveAnalytics();
             document.getElementById('intelligenceView').style.display = 'none';
             document.getElementById('map').classList.remove('hidden');
             if (window.innerWidth <= 768) {
