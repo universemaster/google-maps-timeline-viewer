@@ -10,3 +10,4 @@ export { buildReplayPlan, replayStateAt, nextPausePoint } from "./analytics/repl
 export { discoverPlaces, DEFAULT_PLACE_DISCOVERY_SETTINGS } from "./analytics/place-discovery.js";
 export { applyCorrections } from "./model/corrections.js";
 export { placesPersistence } from "./persistence/database.js";
+export { pointInsideBoundary, previewBoundaryChange } from "./analytics/boundaries.js";

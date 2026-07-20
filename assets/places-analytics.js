@@ -1094,6 +1094,8 @@ var PlacesAnalytics = (() => {
     percentile: () => percentile,
     percentileRank: () => percentileRank,
     placesPersistence: () => placesPersistence,
+    pointInsideBoundary: () => pointInsideBoundary,
+    previewBoundaryChange: () => previewBoundaryChange,
     replayStateAt: () => replayStateAt,
     scoreJourney: () => scoreJourney,
     scoreVisit: () => scoreVisit,
@@ -6208,5 +6210,33 @@ var PlacesAnalytics = (() => {
     putCache: (record2) => put("analytics-cache", record2),
     getCacheRecords: () => getAll("analytics-cache")
   };
+
+  // src/analytics/boundaries.ts
+  function pointInsideBoundary(point, boundary) {
+    if (boundary.kind === "circle") return haversineMeters(point, boundary.centre) <= boundary.radiusMeters;
+    const vertices = boundary.vertices;
+    if (vertices.length < 3) return false;
+    let inside = false;
+    for (let index = 0, previous = vertices.length - 1; index < vertices.length; previous = index, index += 1) {
+      const currentPoint = vertices[index];
+      const previousPoint = vertices[previous];
+      const crosses = currentPoint.latitude > point.latitude !== previousPoint.latitude > point.latitude && point.longitude < (previousPoint.longitude - currentPoint.longitude) * (point.latitude - currentPoint.latitude) / (previousPoint.latitude - currentPoint.latitude) + currentPoint.longitude;
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  }
+  function previewBoundaryChange(visits, current, proposed) {
+    const located = visits.filter((visit) => visit.coordinates !== null);
+    const currentlyInsideVisitIds = current ? located.filter((visit) => pointInsideBoundary(visit.coordinates, current)).map((visit) => visit.id) : [];
+    const proposedInsideVisitIds = located.filter((visit) => pointInsideBoundary(visit.coordinates, proposed)).map((visit) => visit.id);
+    const currentSet = new Set(currentlyInsideVisitIds);
+    const proposedSet = new Set(proposedInsideVisitIds);
+    return {
+      currentlyInsideVisitIds,
+      proposedInsideVisitIds,
+      enteringVisitIds: proposedInsideVisitIds.filter((id) => !currentSet.has(id)),
+      leavingVisitIds: currentlyInsideVisitIds.filter((id) => !proposedSet.has(id))
+    };
+  }
   return __toCommonJS(browser_api_exports);
 })();
