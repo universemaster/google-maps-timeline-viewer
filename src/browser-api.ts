@@ -14,7 +14,7 @@ export { pointInsideBoundary, previewBoundaryChange } from "./analytics/boundari
 export { buildJourneyAnalytics, buildWalkingAnalytics, buildPublicTransportAnalytics } from "./analytics/journeys.js";
 export { VISIT_PURPOSES, matchesAnnotationRule, applyAnnotationRules, mergeAnnotations, copyAnnotationToVisits } from "./analytics/annotations.js";
 export { buildRoutineAnalysis, routinePercentile, routineThreshold } from "./analytics/routines.js";
-export { detectDayAnomalies, detectVisitAnomalies, detectJourneyAnomalies, detectAllAnomalies } from "./analytics/anomalies.js";
+export { detectDayAnomalies, detectVisitAnomalies, detectJourneyAnomalies, detectRoutineSequenceAnomalies, detectPlaceInactivityAnomalies, detectRoutineShiftAnomalies, detectAllAnomalies } from "./analytics/anomalies.js";
 export { comparePlaces, compareJourneys } from "./analytics/comparisons.js";
 export { searchTimeline } from "./analytics/search.js";
 export { buildPeriodSummary } from "./analytics/period-summary.js";

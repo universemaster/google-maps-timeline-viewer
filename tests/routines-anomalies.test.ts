@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectDayAnomalies, detectJourneyAnomalies, detectVisitAnomalies } from "../src/analytics/anomalies.js";
+import { detectDayAnomalies, detectJourneyAnomalies, detectPlaceInactivityAnomalies, detectVisitAnomalies } from "../src/analytics/anomalies.js";
 import { buildRoutineAnalysis } from "../src/analytics/routines.js";
 import type { Journey, Place, SourceReference, Visit } from "../src/model/types.js";
 
@@ -51,5 +51,11 @@ describe("routine and anomaly analysis", () => {
     const journeys = dates.map((day, index) => journey(`j${day}`, `2026-01-${day}`, index === 5 ? 180 : 30));
     expect(detectVisitAnomalies("UTC", visits, places).some(item => item.type === "visit-duration")).toBe(true);
     expect(detectJourneyAnomalies("UTC", journeys).some(item => item.type === "journey-duration")).toBe(true);
+  });
+
+  it("finds a formerly frequent place after an exceptional absence", () => {
+    const visits = ["01", "08", "15", "22", "29"].map(day => visit(`v${day}`, "cafe", `2025-01-${day}T10:00:00Z`, `2025-01-${day}T11:00:00Z`));
+    visits.push(visit("latest", "home", "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"));
+    expect(detectPlaceInactivityAnomalies("UTC", visits, places).some(item => item.type === "formerly-frequent-place")).toBe(true);
   });
 });

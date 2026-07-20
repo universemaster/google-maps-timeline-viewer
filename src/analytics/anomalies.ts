@@ -152,10 +152,77 @@ export function detectJourneyAnomalies(timeZone: string, journeys: readonly Jour
   }));
 }
 
+export function detectRoutineSequenceAnomalies(routine: RoutineAnalysis): AnomalyFinding[] {
+  return routine.observations.flatMap((row, index, all) => {
+    if (row.sequence.length < 2) return [];
+    const prior = all.slice(0, index).filter(candidate => candidate.dayOfWeek === row.dayOfWeek && candidate.sequence.length >= 2);
+    if (prior.length < 8) return [];
+    const key = row.sequence.join("\u001f");
+    const matches = prior.filter(candidate => candidate.sequence.join("\u001f") === key).length;
+    if (matches > 0) return [];
+    return [finding({
+      id: `sequence_${row.date}`, date: row.date, type: "unusual-place-sequence", title: "Unusual place sequence",
+      explanation: `This sequence had not appeared among ${prior.length} earlier matching weekdays.`, value: 0,
+      historicalMedian: null, percentileRank: 0, confidence: Math.min(94, 60 + prior.length),
+      comparableDates: prior.slice(-5).map(candidate => candidate.date), entityId: null,
+    })];
+  });
+}
+
+export function detectPlaceInactivityAnomalies(timeZone: string, visits: readonly Visit[], places: readonly Place[]): AnomalyFinding[] {
+  const latest = visits.flatMap(visit => visit.interval.end ?? visit.interval.start ? [visit.interval.end ?? visit.interval.start!] : []).sort().at(-1);
+  if (!latest) return [];
+  const placeById = new Map(places.map(place => [place.id, place]));
+  const byPlace = new Map<string, Visit[]>();
+  visits.forEach(visit => { if (visit.interval.start) byPlace.set(visit.placeId, [...(byPlace.get(visit.placeId) ?? []), visit]); });
+  return [...byPlace.entries()].flatMap(([placeId, rows]) => {
+    const sorted = rows.sort((a, b) => a.interval.start!.localeCompare(b.interval.start!));
+    if (sorted.length < 5) return [];
+    const gaps = sorted.slice(1).flatMap((visit, index) => {
+      const end = sorted[index]?.interval.end;
+      return end ? [Date.parse(visit.interval.start!) - Date.parse(end)] : [];
+    });
+    const lastAt = sorted.at(-1)!.interval.end ?? sorted.at(-1)!.interval.start!;
+    const currentGap = Date.parse(latest) - Date.parse(lastAt);
+    const rank = routinePercentile(gaps, currentGap);
+    if (currentGap < 90 * 86_400_000 || rank < 95) return [];
+    return [finding({
+      id: `inactive_${placeId}`, date: localParts(latest, timeZone).date, type: "formerly-frequent-place",
+      title: `${placeById.get(placeId)?.name ?? "A formerly frequent place"} is no longer being visited`,
+      explanation: `${Math.round(currentGap / 86_400_000)} days since the last visit; longer than ${rank.toFixed(1)}% of earlier intervals after ${sorted.length} visits.`,
+      value: currentGap, historicalMedian: median(gaps), percentileRank: rank, confidence: Math.min(96, 62 + gaps.length * 3),
+      comparableDates: sorted.slice(-5).map(visit => localParts(visit.interval.start!, timeZone).date), entityId: placeId,
+    })];
+  });
+}
+
+export function detectRoutineShiftAnomalies(routine: RoutineAnalysis): AnomalyFinding[] {
+  if (routine.observations.length < 16) return [];
+  const recent = routine.observations.slice(-4);
+  const baseline = routine.observations.slice(-16, -4);
+  const recentMedian = median(recent.map(row => row.timeOutsideHomeMs));
+  const baselineValues = baseline.map(row => row.timeOutsideHomeMs);
+  const baselineMedian = median(baselineValues);
+  if (recentMedian === null || baselineMedian === null || baselineMedian === 0) return [];
+  const change = (recentMedian - baselineMedian) / baselineMedian * 100;
+  if (Math.abs(change) < 40) return [];
+  const date = recent.at(-1)!.date;
+  const rank = routinePercentile(baselineValues, recentMedian);
+  return [finding({
+    id: `routine_shift_${date}`, date, type: "routine-shift", title: "Recent time-outside-home routine changed",
+    explanation: `The latest four-day median is ${Math.abs(change).toFixed(0)}% ${change > 0 ? "higher" : "lower"} than the preceding 12-day median.`,
+    value: recentMedian, historicalMedian: baselineMedian, percentileRank: rank, confidence: 82,
+    comparableDates: baseline.slice(-5).map(row => row.date), entityId: null,
+  })];
+}
+
 export function detectAllAnomalies(timeZone: string, routine: RoutineAnalysis, places: readonly Place[], visits: readonly Visit[], journeys: readonly Journey[]): AnomalyFinding[] {
   return [
     ...routine.observations.flatMap(row => detectDayAnomalies(row.date, routine)),
     ...detectVisitAnomalies(timeZone, visits, places),
     ...detectJourneyAnomalies(timeZone, journeys),
+    ...detectRoutineSequenceAnomalies(routine),
+    ...detectPlaceInactivityAnomalies(timeZone, visits, places),
+    ...detectRoutineShiftAnomalies(routine),
   ].sort((left, right) => right.date.localeCompare(left.date) || right.confidence - left.confidence);
 }
