@@ -5583,11 +5583,16 @@ var PlacesAnalytics = (() => {
       visits: visits.filter((visit) => visit.interval.start && (granularity === "month" ? monthKey(visit.interval.start, timeZone) : String(localParts(visit.interval.start, timeZone).year)) === period).length,
       totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
       medianDurationMs: summarizeDistribution(durations).median,
-      yearOnYearPercent: null
+      yearOnYearPercent: null,
+      movingAverageVisits: null
     }));
     rows.forEach((row, index) => {
       const previous = granularity === "year" ? rows[index - 1] : rows.find((candidate) => candidate.period === `${Number(row.period.slice(0, 4)) - 1}${row.period.slice(4)}`);
       row.yearOnYearPercent = previous && previous.visits > 0 ? (row.visits - previous.visits) / previous.visits * 100 : null;
+    });
+    const averages = movingAverage(rows.map((row) => row.visits), granularity === "month" ? 3 : 2);
+    rows.forEach((row, index) => {
+      row.movingAverageVisits = averages[index] ?? null;
     });
     return rows;
   }

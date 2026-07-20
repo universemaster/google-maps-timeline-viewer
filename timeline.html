@@ -8022,12 +8022,14 @@ Departed: ${end}</description>
         return canonical;
     }
 
-    function renderHourDistribution(values) {
+    function renderDistribution(values, labels = null, ariaLabel = 'Distribution') {
         const maximum = Math.max(1, ...values);
-        return `<div class="distribution-bars" aria-label="Arrivals by hour">${values.map((value, hour) =>
-            `<i title="${hour}:00 — ${value} visit${value === 1 ? '' : 's'}" style="height:${Math.max(2, value / maximum * 100)}%"></i>`
+        return `<div class="distribution-bars" aria-label="${escapeHtml(ariaLabel)}">${values.map((value, index) =>
+            `<i title="${escapeHtml(labels?.[index] || `${index}:00`)} — ${value} visit${value === 1 ? '' : 's'}" style="height:${Math.max(2, value / maximum * 100)}%"></i>`
         ).join('')}</div>`;
     }
+
+    function renderHourDistribution(values, ariaLabel = 'Visits by hour') { return renderDistribution(values, null, ariaLabel); }
 
     async function appendPlaceCorrection(command) {
         const createdAt = new Date().toISOString();
@@ -8048,6 +8050,11 @@ Departed: ${end}</description>
         const destinations = profile.commonDestinations.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough linked journeys';
         const sequences = profile.commonJourneySequences.slice(0, 3).map(row => `${row.placeIds.map(id => escapeHtml(canonical.places.find(place => place.id === id)?.name || 'Unknown')).join(' → ')} (${row.count})`).join('<br>') || 'Not enough repeated sequences';
         const placeVisits = canonical.visits.filter(visit => visit.placeId === profile.place.id).sort((a, b) => (b.interval.start || '').localeCompare(a.interval.start || ''));
+        const visitDurations = placeVisits.flatMap(visit => visit.interval.start && visit.interval.end ? [Math.max(0, Date.parse(visit.interval.end) - Date.parse(visit.interval.start))] : []);
+        const durationMaximum = Math.max(1, ...visitDurations);
+        const durationBins = Array.from({ length: 8 }, () => 0);
+        visitDurations.forEach(duration => { durationBins[Math.min(7, Math.floor(duration / durationMaximum * 8))] += 1; });
+        const durationLabels = durationBins.map((_, index) => `${formatAnalyticsDuration(index / 8 * durationMaximum)}–${formatAnalyticsDuration((index + 1) / 8 * durationMaximum)}`);
         const otherPlaces = canonical.places.filter(place => place.id !== profile.place.id && !place.ignored).sort((a, b) => a.name.localeCompare(b.name));
         const placeOptions = otherPlaces.map(place => `<option value="${place.id}">${escapeHtml(place.name)}</option>`).join('');
         const centre = profile.place.coordinates || { latitude: 0, longitude: 0 };
@@ -8064,13 +8071,25 @@ Departed: ${end}</description>
                 <div class="intelligence-card"><span>Total time</span><strong>${formatAnalyticsDuration(profile.totalDurationMs)}</strong></div>
                 <div class="intelligence-card"><span>Median visit</span><strong>${formatAnalyticsDuration(profile.duration.median)}</strong></div>
             </div>
-            <h4>Arrival times</h4>${renderHourDistribution(profile.arrivalHours)}
+            <div class="quality-columns">
+                <div><h4>Arrival times</h4>${renderHourDistribution(profile.arrivalHours, 'Arrivals by hour')}</div>
+                <div><h4>Departure times</h4>${renderHourDistribution(profile.departureHours, 'Departures by hour')}</div>
+            </div>
+            <div class="quality-columns">
+                <div><h4>Day of week</h4>${renderDistribution(profile.daysOfWeek, ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], 'Visits by weekday')}</div>
+                <div><h4>Month of year</h4>${renderDistribution(profile.monthsOfYear, ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], 'Visits by month')}</div>
+            </div>
+            <h4>Visit duration distribution</h4>${renderDistribution(durationBins, durationLabels, 'Visit duration distribution')}
             <table class="profile-table">
                 <tr><td>First visit</td><td>${profile.firstVisitAt ? formatTimestamp(profile.firstVisitAt, 'D MMM YYYY') : '—'}</td></tr>
                 <tr><td>Most recent visit</td><td>${profile.mostRecentVisitAt ? formatTimestamp(profile.mostRecentVisitAt, 'D MMM YYYY') : '—'}</td></tr>
                 <tr><td>Mean visit</td><td>${formatAnalyticsDuration(profile.duration.mean)}</td></tr>
                 <tr><td>Shortest / longest</td><td>${formatAnalyticsDuration(profile.duration.minimum)} / ${formatAnalyticsDuration(profile.duration.maximum)}</td></tr>
+                <tr><td>10th / 90th percentile</td><td>${formatAnalyticsDuration(profile.duration.p10)} / ${formatAnalyticsDuration(profile.duration.p90)}</td></tr>
                 <tr><td>Middle 50%</td><td>${formatAnalyticsDuration(profile.duration.p25)} – ${formatAnalyticsDuration(profile.duration.p75)}</td></tr>
+                <tr><td>Mean visit frequency</td><td>${profile.frequency.perWeek.toFixed(2)} / week · ${profile.frequency.perMonth.toFixed(2)} / month · ${profile.frequency.perYear.toFixed(2)} / year</td></tr>
+                <tr><td>Longest interval between visits</td><td>${formatAnalyticsDuration(profile.longestIntervalBetweenVisitsMs)}</td></tr>
+                <tr><td>Current interval since latest visit</td><td>${formatAnalyticsDuration(profile.currentIntervalMs)}</td></tr>
                 <tr><td>Typical previous places</td><td>${escapeHtml(previous)}</td></tr>
                 <tr><td>Typical next places</td><td>${escapeHtml(next)}</td></tr>
                 <tr><td>Common origins</td><td>${escapeHtml(origins)}</td></tr>
@@ -8083,6 +8102,10 @@ Departed: ${end}</description>
                 <tr><td>Possible nearby duplicates</td><td>${profile.possibleDuplicatePlaceIds.map(id => escapeHtml(canonical.places.find(place => place.id === id)?.name || 'Unknown')).join(', ') || 'None detected'}</td></tr>
                 <tr><td>Low-confidence / uncertain visits</td><td>${profile.lowConfidenceVisits} / ${profile.uncertainTimes}</td></tr>
             </table>
+            <div class="quality-columns">
+                <div><h4>Change by year</h4><table class="profile-table"><thead><tr><th>Year</th><th>Visits</th><th>Total time</th><th>Median</th><th>YoY</th></tr></thead><tbody>${profile.byYear.map(row => `<tr><td>${row.period}</td><td>${row.visits}</td><td>${formatAnalyticsDuration(row.totalDurationMs)}</td><td>${formatAnalyticsDuration(row.medianDurationMs)}</td><td>${row.yearOnYearPercent === null ? '—' : `${row.yearOnYearPercent >= 0 ? '+' : ''}${row.yearOnYearPercent.toFixed(1)}%`}</td></tr>`).join('')}</tbody></table></div>
+                <div><h4>Recent months</h4><table class="profile-table"><thead><tr><th>Month</th><th>Visits</th><th>3-month avg</th><th>Total time</th><th>Median</th></tr></thead><tbody>${profile.byMonth.slice(-12).map(row => `<tr><td>${row.period}</td><td>${row.visits}</td><td>${row.movingAverageVisits === null ? '—' : row.movingAverageVisits.toFixed(1)}</td><td>${formatAnalyticsDuration(row.totalDurationMs)}</td><td>${formatAnalyticsDuration(row.medianDurationMs)}</td></tr>`).join('')}</tbody></table></div>
+            </div>
             <section class="place-editor">
                 <h4>Correct this place</h4>
                 <div class="place-editor-grid">

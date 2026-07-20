@@ -1,7 +1,7 @@
 import type { Journey, Place, Visit } from "../model/types.js";
 import { durationMilliseconds } from "./intervals.js";
 import { estimatedRadiusMeters, haversineMeters } from "./spatial.js";
-import { summarizeDistribution, type DistributionSummary } from "./statistics.js";
+import { movingAverage, summarizeDistribution, type DistributionSummary } from "./statistics.js";
 import { localParts, monthKey } from "./time.js";
 
 export interface PeriodMetric {
@@ -10,6 +10,7 @@ export interface PeriodMetric {
   totalDurationMs: number;
   medianDurationMs: number | null;
   yearOnYearPercent: number | null;
+  movingAverageVisits: number | null;
 }
 
 export interface FrequencySummary {
@@ -83,11 +84,14 @@ function periodMetrics(visits: Visit[], timeZone: string, granularity: "month" |
     totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
     medianDurationMs: summarizeDistribution(durations).median,
     yearOnYearPercent: null,
+    movingAverageVisits: null,
   }));
   rows.forEach((row, index) => {
     const previous = granularity === "year" ? rows[index - 1] : rows.find(candidate => candidate.period === `${Number(row.period.slice(0, 4)) - 1}${row.period.slice(4)}`);
     row.yearOnYearPercent = previous && previous.visits > 0 ? ((row.visits - previous.visits) / previous.visits) * 100 : null;
   });
+  const averages = movingAverage(rows.map(row => row.visits), granularity === "month" ? 3 : 2);
+  rows.forEach((row, index) => { row.movingAverageVisits = averages[index] ?? null; });
   return rows;
 }
 
