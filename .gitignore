@@ -14,3 +14,8 @@ dist/
 coverage/
 .playwright-cli/
 output/playwright/
+
+# Local server credentials and Android build output
+.places-server-token
+server.local.json
+build/android/

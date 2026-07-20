@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "1970-01-01T00:00:00.000Z",
+  "collections": {
+    "corrections": {},
+    "annotations": {},
+    "annotation-rules": {},
+    "suggestion-decisions": {},
+    "analytics-cache": {},
+    "settings": {}
+  },
+  "legacyEdits": {
+    "additions": [],
+    "modifications": [],
+    "deletions": []
+  }
+}
