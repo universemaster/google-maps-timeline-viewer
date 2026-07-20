@@ -1866,6 +1866,34 @@
                 <h4>Most interesting findings</h4>
                 <div id="anomalyFeed" class="suggestion-grid"></div>
             </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Period summary</h3><p>Time allocation, places and movement for the date range selected in the main controls.</p></div></div>
+                <div id="periodSummaryCards" class="intelligence-grid"></div>
+                <div class="quality-columns"><div><h4>Time by place category</h4><div id="periodCategories"></div></div><div><h4>Movement by mode</h4><div id="periodMovement"></div></div></div>
+                <h4>Places with the most time</h4><div id="periodPlaces"></div>
+            </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Compare places and journeys</h3><p>Select two or more rows. The first selected item is the baseline for raw and percentage differences.</p></div></div>
+                <div class="quality-columns">
+                    <div><label>Places<select id="placeComparisonSelect" multiple size="6" style="width:100%"></select></label><div id="placeComparisonResults"></div></div>
+                    <div><label>Journeys<select id="journeyComparisonSelect" multiple size="6" style="width:100%"></select></label><div id="journeyComparisonResults"></div></div>
+                </div>
+            </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Advanced search</h3><p>Combine filters across visits, annotations and journeys. Results update without leaving this page.</p></div></div>
+                <div class="discovery-settings">
+                    <label>Place<select id="searchPlace"><option value="">Any place</option></select></label>
+                    <label>Category<select id="searchCategory"><option value="">Any category</option></select></label>
+                    <label>Minimum visit (minutes)<input id="searchVisitMinutes" type="number" min="0"></label>
+                    <label>Purpose<select id="searchPurpose"><option value="">Any purpose</option></select></label>
+                    <label>Travel mode<select id="searchTravelMode"><option value="">Any mode</option></select></label>
+                    <label>Minimum journey (km)<input id="searchJourneyKm" type="number" min="0" step="0.1"></label>
+                    <label>Maximum confidence<input id="searchConfidence" type="number" min="0" max="100"></label>
+                    <label>Annotation<select id="searchAnnotated"><option value="">Either</option><option value="true">Annotated only</option><option value="false">Unannotated only</option></select></label>
+                </div>
+                <div class="replay-toolbar"><button id="applyAdvancedSearch" class="primary">Apply filters</button><button id="clearAdvancedSearch">Clear</button><span id="searchStatus"></span></div>
+                <div id="searchResults" class="visit-correction-list"></div>
+            </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
                 <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
@@ -8395,6 +8423,82 @@ Departed: ${end}</description>
         document.getElementById('anomalyFeed').innerHTML = findings.length ? findings.slice(0, 24).map(item => `<article class="suggestion-card"><div class="suggestion-heading"><div><strong>${escapeHtml(item.title)}</strong><br><small>${moment(item.date).format('D MMMM YYYY')} · ${item.severity}</small></div><span class="confidence-badge">${Math.round(item.confidence)}/100</span></div><p>${escapeHtml(item.explanation)}</p><p><small>Compared with: ${item.comparableDates.map(date => moment(date).format('D MMM YYYY')).join(', ') || 'no earlier examples'}</small></p></article>`).join('') : '<p>No robust anomaly findings yet. At least five comparable historical events are needed for event-level findings.</p>';
     }
 
+    function percentageDifference(value) {
+        if (value === null || !Number.isFinite(value)) return '';
+        return ` <small>(${value >= 0 ? '+' : ''}${value.toFixed(1)}%)</small>`;
+    }
+
+    function renderPeriodSummary(canonical, timeZone) {
+        const startDate = document.getElementById('startDatePicker').value;
+        const endDate = document.getElementById('endDatePicker').value;
+        const summary = PlacesAnalytics.buildPeriodSummary(startDate, endDate, timeZone, canonical.places, canonical.visits, canonical.journeys);
+        const placeById = new Map(canonical.places.map(place => [place.id, place]));
+        const cards = [
+            ['At home', formatAnalyticsDuration(summary.timeAtHomeMs)], ['Outside home', formatAnalyticsDuration(summary.timeOutsideHomeMs)],
+            ['Places', summary.placeMetrics.length.toLocaleString()], ['New places', summary.newPlaceIds.length.toLocaleString()],
+            ['Median journey', formatAnalyticsDuration(summary.journeyDuration.median)], ['Most common route', summary.mostFrequentOriginDestination ? `${summary.mostFrequentOriginDestination.count}×` : '—'],
+        ];
+        document.getElementById('periodSummaryCards').innerHTML = cards.map(([label, value]) => `<div class="intelligence-card"><span>${label}</span><strong>${value}</strong></div>`).join('');
+        const bars = (record, formatter) => Object.entries(record).sort((a, b) => b[1] - a[1]).map(([label, value]) => `<p><strong>${escapeHtml(formatActivityType(label))}</strong><br><small>${formatter(value)}</small></p>`).join('') || '<p>No data in this period.</p>';
+        document.getElementById('periodCategories').innerHTML = bars(summary.timeByCategoryMs, formatAnalyticsDuration);
+        document.getElementById('periodMovement').innerHTML = bars(summary.timeByTravelModeMs, value => formatAnalyticsDuration(value));
+        document.getElementById('periodPlaces').innerHTML = `<table class="profile-table"><thead><tr><th>Place</th><th>Visits</th><th>Total time</th><th>Median visit</th></tr></thead><tbody>${summary.placeMetrics.slice(0, 20).map(row => `<tr><td>${escapeHtml(placeById.get(row.placeId)?.name || 'Unknown')}</td><td>${row.visits}</td><td>${formatAnalyticsDuration(row.totalDurationMs)}</td><td>${formatAnalyticsDuration(row.medianDurationMs)}</td></tr>`).join('')}</tbody></table>`;
+    }
+
+    function renderComparisons(canonical, timeZone) {
+        const placeSelect = document.getElementById('placeComparisonSelect');
+        const journeySelect = document.getElementById('journeyComparisonSelect');
+        const placeById = new Map(canonical.places.map(place => [place.id, place]));
+        placeSelect.innerHTML = canonical.places.filter(place => !place.ignored).map((place, index) => `<option value="${place.id}" ${index < 2 ? 'selected' : ''}>${escapeHtml(place.name)}</option>`).join('');
+        journeySelect.innerHTML = canonical.journeys.slice(0, 100).map((journey, index) => `<option value="${journey.id}" ${index < 2 ? 'selected' : ''}>${journey.interval.start ? formatTimestamp(journey.interval.start, 'D MMM YYYY HH:mm') : 'Unknown'} · ${escapeHtml(formatActivityType(journey.travelMode))}</option>`).join('');
+        const updatePlaces = () => {
+            const ids = [...placeSelect.selectedOptions].map(option => option.value);
+            const rows = PlacesAnalytics.comparePlaces(ids, canonical.places, canonical.visits, canonical.journeys, timeZone);
+            document.getElementById('placeComparisonResults').innerHTML = rows.length < 2 ? '<p><small>Select at least two places.</small></p>' : `<table class="profile-table"><thead><tr><th>Place</th><th>Visits</th><th>Total time</th><th>Median</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.place.name)}</td><td>${row.visitCount.value}${percentageDifference(row.visitCount.percentageDifferenceFromBaseline)}</td><td>${formatAnalyticsDuration(row.totalDurationMs.value)}${percentageDifference(row.totalDurationMs.percentageDifferenceFromBaseline)}</td><td>${formatAnalyticsDuration(row.medianDurationMs.value)}${percentageDifference(row.medianDurationMs.percentageDifferenceFromBaseline)}</td></tr>`).join('')}</tbody></table>`;
+        };
+        const updateJourneys = () => {
+            const ids = [...journeySelect.selectedOptions].map(option => option.value);
+            const rows = PlacesAnalytics.compareJourneys(ids, canonical.journeys);
+            document.getElementById('journeyComparisonResults').innerHTML = rows.length < 2 ? '<p><small>Select at least two journeys.</small></p>' : `<table class="profile-table"><thead><tr><th>Journey</th><th>Duration</th><th>Distance</th><th>Quality</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(placeById.get(row.journey.startPlaceId)?.name || 'Unknown')} → ${escapeHtml(placeById.get(row.journey.endPlaceId)?.name || 'Unknown')}</td><td>${formatAnalyticsDuration(row.durationMs.value)}${percentageDifference(row.durationMs.percentageDifferenceFromBaseline)}</td><td>${formatDistance(row.distanceMeters.value || 0)}${percentageDifference(row.distanceMeters.percentageDifferenceFromBaseline)}</td><td>${row.dataQualityScore.value}/100${percentageDifference(row.dataQualityScore.percentageDifferenceFromBaseline)}</td></tr>`).join('')}</tbody></table>`;
+        };
+        placeSelect.addEventListener('change', updatePlaces); journeySelect.addEventListener('change', updateJourneys); updatePlaces(); updateJourneys();
+    }
+
+    function hydrateAdvancedSearch(canonical) {
+        const place = document.getElementById('searchPlace');
+        const category = document.getElementById('searchCategory');
+        const purpose = document.getElementById('searchPurpose');
+        const mode = document.getElementById('searchTravelMode');
+        place.innerHTML = '<option value="">Any place</option>' + canonical.places.map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+        category.innerHTML = '<option value="">Any category</option>' + [...new Set(canonical.places.map(item => item.category).filter(Boolean))].sort().map(value => `<option>${escapeHtml(value)}</option>`).join('');
+        purpose.innerHTML = '<option value="">Any purpose</option>' + PlacesAnalytics.VISIT_PURPOSES.map(value => `<option>${value}</option>`).join('');
+        mode.innerHTML = '<option value="">Any mode</option>' + [...new Set(canonical.journeys.map(item => item.travelMode))].sort().map(value => `<option>${escapeHtml(value)}</option>`).join('');
+        const run = () => {
+            const numberOrUndefined = id => { const value = document.getElementById(id).value; return value === '' ? undefined : Number(value); };
+            const annotatedValue = document.getElementById('searchAnnotated').value;
+            const query = {
+                dateRange: { start: document.getElementById('startDatePicker').value, end: document.getElementById('endDatePicker').value },
+                placeIds: place.value ? [place.value] : undefined, placeCategories: category.value ? [category.value] : undefined,
+                visitDurationMs: numberOrUndefined('searchVisitMinutes') === undefined ? undefined : { minimum: numberOrUndefined('searchVisitMinutes') * 60000 },
+                purposes: purpose.value ? [purpose.value] : undefined, travelModes: mode.value ? [mode.value] : undefined,
+                journeyDistanceMeters: numberOrUndefined('searchJourneyKm') === undefined ? undefined : { minimum: numberOrUndefined('searchJourneyKm') * 1000 },
+                confidence: numberOrUndefined('searchConfidence') === undefined ? undefined : { maximum: numberOrUndefined('searchConfidence') },
+                annotated: annotatedValue === '' ? undefined : annotatedValue === 'true',
+            };
+            const result = PlacesAnalytics.searchTimeline(query, getSelectedTimezone(), canonical.places, canonical.visits, canonical.journeys, canonical.annotations);
+            document.getElementById('searchStatus').textContent = `${result.visits.length} visits · ${result.journeys.length} journeys · ${result.places.length} places`;
+            const placeById = new Map(canonical.places.map(item => [item.id, item]));
+            const entries = [
+                ...result.visits.map(item => ({ at: item.interval.start, text: `${placeById.get(item.placeId)?.name || 'Unknown'} · ${formatAnalyticsDuration(item.interval.start && item.interval.end ? Date.parse(item.interval.end) - Date.parse(item.interval.start) : null)}` })),
+                ...result.journeys.map(item => ({ at: item.interval.start, text: `${formatActivityType(item.travelMode)} · ${formatDistance(item.distanceMeters || 0)}` })),
+            ].sort((a, b) => (b.at || '').localeCompare(a.at || '')).slice(0, 100);
+            document.getElementById('searchResults').innerHTML = entries.map(item => `<div class="visit-correction-row"><span>${item.at ? formatTimestamp(item.at, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${escapeHtml(item.text)}</span></div>`).join('') || '<p>No matching visits or journeys.</p>';
+        };
+        document.getElementById('applyAdvancedSearch').onclick = run;
+        document.getElementById('clearAdvancedSearch').onclick = () => { ['searchPlace', 'searchCategory', 'searchVisitMinutes', 'searchPurpose', 'searchTravelMode', 'searchJourneyKm', 'searchConfidence', 'searchAnnotated'].forEach(id => document.getElementById(id).value = ''); run(); };
+        run();
+    }
+
     function discoverySettings() {
         let saved = {};
         try { saved = JSON.parse(localStorage.getItem('places.discovery.settings') || '{}'); } catch (_) {}
@@ -8557,6 +8661,9 @@ Departed: ${end}</description>
         await renderSuggestedPlaces(canonical, timeZone);
         renderJourneyAnalytics(canonical);
         renderRoutineAnalysis(canonical, timeZone, selectedDate);
+        renderPeriodSummary(canonical, timeZone);
+        renderComparisons(canonical, timeZone);
+        hydrateAdvancedSearch(canonical);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';
