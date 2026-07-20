@@ -8803,6 +8803,20 @@ Departed: ${end}</description>
         await recordSuggestionDecision(suggestion, 'merged', targetPlaceId);
     }
 
+    function suggestedPlaceMap(suggestion, canonical) {
+        const nearby = suggestion.nearestKnownPlaces.slice(0, 5).flatMap(row => {
+            const place = canonical.places.find(item => item.id === row.placeId);
+            return place?.coordinates ? [{ ...row, place }] : [];
+        });
+        const maximumDistance = Math.max(100, ...nearby.map(row => row.distanceMeters));
+        const markers = nearby.map(row => {
+            const dx = (row.place.coordinates.longitude - suggestion.centre.longitude) * 70000 / maximumDistance * 80;
+            const dy = (row.place.coordinates.latitude - suggestion.centre.latitude) * 111320 / maximumDistance * 80;
+            return `<circle cx="${100 + dx}" cy="${100 - dy}" r="5" fill="#64748b"><title>${escapeHtml(row.place.name)} · ${Math.round(row.distanceMeters)} m</title></circle>`;
+        }).join('');
+        return `<svg viewBox="0 0 200 200" style="width:100%;height:150px;border-radius:9px;background:radial-gradient(circle,#f8fbff,#e8eff8)" aria-label="Suggested place map preview"><circle cx="100" cy="100" r="${Math.max(8, Math.min(75, suggestion.radiusMeters / maximumDistance * 80))}" fill="rgba(90,149,245,.18)" stroke="#5a95f5" stroke-width="2"></circle>${markers}<circle cx="100" cy="100" r="7" fill="#ff7a45" stroke="white" stroke-width="2"><title>Suggested place centre</title></circle></svg>`;
+    }
+
     async function renderSuggestedPlaces(canonical, timeZone) {
         const settings = discoverySettings();
         saveDiscoverySettings(settings);
@@ -8812,23 +8826,32 @@ Departed: ${end}</description>
         document.getElementById('suggestionStatus').textContent = `${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}`;
         const knownPlaces = canonical.places.filter(place => place.googlePlaceId || place.category || place.boundary).sort((a, b) => a.name.localeCompare(b.name));
         const grid = document.getElementById('suggestionGrid');
-        grid.innerHTML = suggestions.length ? suggestions.map((suggestion, index) => `
+        grid.innerHTML = suggestions.length ? suggestions.map((suggestion, index) => {
+            const nearest = suggestion.nearestKnownPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${Math.round(row.distanceMeters)} m)`).join(', ') || 'No known places nearby';
+            const possibleMatch = suggestion.nearestKnownPlaces.map(row => ({ row, place: canonical.places.find(place => place.id === row.placeId) })).find(item => item.row.distanceMeters <= 100 && item.place?.googlePlaceId);
+            const contributing = suggestion.visitIds.map(id => canonical.visits.find(visit => visit.id === id)).filter(Boolean);
+            return `
             <article class="suggestion-card" data-suggestion-index="${index}">
                 <h4>${suggestion.classification.replaceAll('-', ' ')}</h4>
                 <small>${suggestion.confidence}/100 confidence</small>
+                ${suggestedPlaceMap(suggestion, canonical)}
                 <p>${escapeHtml(suggestion.reason)}</p>
                 <p><strong>${suggestion.visitCount}</strong> visits · <strong>${suggestion.uniqueDays}</strong> days · <strong>${formatAnalyticsDuration(suggestion.totalDurationMs)}</strong><br>
                 ${formatTimestamp(suggestion.firstVisitAt, 'D MMM YYYY')} to ${formatTimestamp(suggestion.mostRecentVisitAt, 'D MMM YYYY')} · radius ${Math.round(suggestion.radiusMeters)} m</p>
+                <p><small>Nearest known: ${escapeHtml(nearest)}<br>Possible Google Places match: ${possibleMatch ? `${escapeHtml(possibleMatch.place.name)} (${Math.round(possibleMatch.row.distanceMeters)} m)` : 'none with sufficient evidence'}</small></p>
+                <label>Proposed radius (metres)<input data-suggestion-radius type="number" min="5" value="${Math.round(suggestion.radiusMeters)}" style="width:90px"></label>
+                <details><summary>Review ${contributing.length} contributing visits</summary>${contributing.map(visit => `<p><small>${visit.interval.start ? formatTimestamp(visit.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown start'} · ${formatAnalyticsDuration(visit.interval.start && visit.interval.end ? Date.parse(visit.interval.end) - Date.parse(visit.interval.start) : null)} · confidence ${visit.confidence?.score ?? '—'}/100</small></p>`).join('')}</details>
                 <div class="suggestion-actions">
                     <button data-suggestion-action="accept">Save place</button>
                     <select data-suggestion-target><option value="">Merge with…</option>${knownPlaces.map(place => `<option value="${place.id}">${escapeHtml(place.name)}</option>`).join('')}</select>
                     <button data-suggestion-action="ignore-once">Ignore once</button>
                     <button data-suggestion-action="ignore-permanently">Always ignore</button>
                 </div>
-            </article>`).join('') : '<p>No unresolved clusters meet the current thresholds.</p>';
+            </article>`;
+        }).join('') : '<p>No unresolved clusters meet the current thresholds.</p>';
         grid.querySelectorAll('.suggestion-card').forEach(card => {
             const suggestion = suggestions[Number(card.dataset.suggestionIndex)];
-            card.querySelector('[data-suggestion-action="accept"]').addEventListener('click', async () => { await acceptSuggestedPlace(suggestion, canonical); await showIntelligenceView(); });
+            card.querySelector('[data-suggestion-action="accept"]').addEventListener('click', async () => { await acceptSuggestedPlace({ ...suggestion, radiusMeters: Number(card.querySelector('[data-suggestion-radius]').value || suggestion.radiusMeters) }, canonical); await showIntelligenceView(); });
             card.querySelector('[data-suggestion-target]').addEventListener('change', async event => { if (event.target.value) { await mergeSuggestedPlace(suggestion, event.target.value); await showIntelligenceView(); } });
             card.querySelector('[data-suggestion-action="ignore-once"]').addEventListener('click', async () => { await recordSuggestionDecision(suggestion, 'ignored-once'); await renderSuggestedPlaces(canonical, timeZone); });
             card.querySelector('[data-suggestion-action="ignore-permanently"]').addEventListener('click', async () => { await recordSuggestionDecision(suggestion, 'ignored-permanently'); await renderSuggestedPlaces(canonical, timeZone); });
