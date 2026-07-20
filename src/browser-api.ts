@@ -15,3 +15,6 @@ export { buildJourneyAnalytics, buildWalkingAnalytics, buildPublicTransportAnaly
 export { VISIT_PURPOSES, matchesAnnotationRule, applyAnnotationRules, mergeAnnotations, copyAnnotationToVisits } from "./analytics/annotations.js";
 export { buildRoutineAnalysis, routinePercentile, routineThreshold } from "./analytics/routines.js";
 export { detectDayAnomalies, detectVisitAnomalies, detectJourneyAnomalies, detectAllAnomalies } from "./analytics/anomalies.js";
+export { comparePlaces, compareJourneys } from "./analytics/comparisons.js";
+export { searchTimeline } from "./analytics/search.js";
+export { buildPeriodSummary } from "./analytics/period-summary.js";
