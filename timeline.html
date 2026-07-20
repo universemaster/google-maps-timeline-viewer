@@ -1797,6 +1797,11 @@
             </div>
             <div id="analyticsProgress" class="quality-issue" style="display:none"><strong id="analyticsProgressStage">Preparing analysis</strong><br><progress id="analyticsProgressBar" max="100" value="0" style="width:min(520px,80%)"></progress> <button id="cancelAnalytics" class="control-btn">Cancel</button></div>
             <section id="dailyIntelligenceCards" class="intelligence-grid"></section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>How this day compares</h3><p>Previous-day, matching-weekday, monthly and annual context, including historical percentile ranks.</p></div></div>
+                <div id="selectedDayComparison"></div>
+                <h4>Day event feed</h4><div id="selectedDayEventFeed" class="visit-correction-list"></div>
+            </section>
             <section class="intelligence-panel replay-panel">
                 <div class="intelligence-header"><div><h3>Daily movement replay</h3><p>Replay visits and journeys using only your imported history.</p></div></div>
                 <div class="replay-toolbar">
@@ -8424,6 +8429,25 @@ Departed: ${end}</description>
         document.getElementById('anomalyFeed').innerHTML = findings.length ? findings.slice(0, 24).map(item => `<article class="suggestion-card"><div class="suggestion-heading"><div><strong>${escapeHtml(item.title)}</strong><br><small>${moment(item.date).format('D MMMM YYYY')} · ${item.severity}</small></div><span class="confidence-badge">${Math.round(item.confidence)}/100</span></div><p>${escapeHtml(item.explanation)}</p><p><small>Compared with: ${item.comparableDates.map(date => moment(date).format('D MMM YYYY')).join(', ') || 'no earlier examples'}</small></p></article>`).join('') : '<p>No robust anomaly findings yet. At least five comparable historical events are needed for event-level findings.</p>';
     }
 
+    function renderSelectedDayContext(canonical, timeZone, selectedDate, prepared) {
+        const context = prepared.selectedDayContext;
+        if (!context) return;
+        const definitions = {
+            timeAtHomeMs: ['Time at home', formatAnalyticsDuration], timeOutsideHomeMs: ['Time outside home', formatAnalyticsDuration],
+            totalDistanceMeters: ['Distance', formatDistance], placesVisited: ['Places', value => Number(value).toLocaleString()],
+            journeys: ['Journeys', value => Number(value).toLocaleString()], walkingDurationMs: ['Walking', formatAnalyticsDuration],
+            publicTransportDurationMs: ['Public transport', formatAnalyticsDuration], trackingCoveragePercent: ['Tracking coverage', value => `${Number(value).toFixed(1)}%`],
+            largestTrackingGapMs: ['Largest gap', formatAnalyticsDuration],
+        };
+        document.getElementById('selectedDayComparison').innerHTML = `<table class="profile-table"><thead><tr><th>Metric</th><th>Selected day</th><th>Previous day</th><th>Previous 12 matching weekdays</th><th>Monthly median</th><th>Historical rank</th></tr></thead><tbody>${context.metrics.map(metric => {
+            const [label, formatter] = definitions[metric.key];
+            const cell = comparisonLabel => { const comparison = metric.comparisons.find(row => row.label === comparisonLabel); return comparison?.value === null ? '—' : `${formatter(comparison.value)}${percentageDifference(comparison.percentageDifference)}`; };
+            return `<tr><td>${label}</td><td>${formatter(metric.value)}</td><td>${cell('Previous day')}</td><td>${cell('Previous 12 matching weekdays')}</td><td>${cell('Monthly median')}</td><td>${metric.percentileRank === null ? '—' : `${metric.percentileRank.toFixed(1)}th`}<br><small>${metric.historicalSampleSize} earlier days</small></td></tr>`;
+        }).join('')}</tbody></table>`;
+        const events = PlacesAnalytics.buildDayEventFeed(selectedDate, timeZone, canonical.places, canonical.visits, canonical.journeys, prepared.anomalies);
+        document.getElementById('selectedDayEventFeed').innerHTML = events.length ? events.map(event => `<div class="visit-correction-row"><span><strong>${formatTimestamp(event.at, 'HH:mm')} · ${escapeHtml(event.title)}</strong><br><small>${escapeHtml(event.detail)} · ${escapeHtml(event.type.replace('-', ' '))}</small></span></div>`).join('') : '<p>No events were recorded for this day.</p>';
+    }
+
     let activeAnalyticsWorker = null;
 
     function cancelActiveAnalytics() {
@@ -8435,9 +8459,9 @@ Departed: ${end}</description>
         document.getElementById('analyticsProgressBar').value = 0;
     }
 
-    async function loadPreparedIntelligence(canonical, timeZone) {
+    async function loadPreparedIntelligence(canonical, timeZone, selectedDate) {
         const revision = Math.max(0, ...(canonical.corrections || []).map(command => Number(command.revision) || 0));
-        const key = PlacesAnalytics.buildAnalyticsCacheKey(canonical, 'intelligence', { timeZone }, revision);
+        const key = PlacesAnalytics.buildAnalyticsCacheKey(canonical, 'intelligence', { timeZone, selectedDate }, revision);
         const cached = await PlacesAnalytics.placesPersistence.getCache(key);
         const progress = document.getElementById('analyticsProgress');
         const stage = document.getElementById('analyticsProgressStage');
@@ -8451,7 +8475,7 @@ Departed: ${end}</description>
         if (activeAnalyticsWorker) cancelActiveAnalytics();
         if (typeof Worker === 'undefined') {
             stage.textContent = 'Calculating in this browser'; bar.value = 10;
-            const result = await PlacesAnalytics.calculateIntelligenceJob({ timeline: canonical, timeZone }, update => { stage.textContent = update.stage; bar.value = update.progress * 100; });
+            const result = await PlacesAnalytics.calculateIntelligenceJob({ timeline: canonical, timeZone, selectedDate }, update => { stage.textContent = update.stage; bar.value = update.progress * 100; });
             await PlacesAnalytics.placesPersistence.putCache({ key, value: result, createdAt: new Date().toISOString(), analyticsVersion: PlacesAnalytics.ANALYTICS_VERSION });
             progress.style.display = 'none';
             return result;
@@ -8468,7 +8492,7 @@ Departed: ${end}</description>
                 if (event.data.type === 'error') { worker.terminate(); activeAnalyticsWorker = null; reject(new Error(event.data.message)); }
             };
             worker.onerror = event => { worker.terminate(); activeAnalyticsWorker = null; reject(new Error(event.message || 'Analytics worker failed')); };
-            worker.postMessage({ type: 'run', id, input: { timeline: canonical, timeZone } });
+            worker.postMessage({ type: 'run', id, input: { timeline: canonical, timeZone, selectedDate } });
         });
         await PlacesAnalytics.placesPersistence.putCache({ key, value: result, createdAt: new Date().toISOString(), analyticsVersion: PlacesAnalytics.ANALYTICS_VERSION });
         stage.textContent = 'Analysis ready'; bar.value = 100;
@@ -8725,9 +8749,10 @@ Departed: ${end}</description>
             document.getElementById('show-sidebar-btn')?.classList.remove('active');
         }
         try {
-            const prepared = await loadPreparedIntelligence(canonical, timeZone);
+            const prepared = await loadPreparedIntelligence(canonical, timeZone, selectedDate);
             renderDataQuality(canonical, timeZone, prepared.dataQuality);
             renderRoutineAnalysis(canonical, timeZone, selectedDate, prepared);
+            renderSelectedDayContext(canonical, timeZone, selectedDate, prepared);
         } catch (error) {
             if (error?.name !== 'AbortError') {
                 console.error('Background analysis failed:', error);
