@@ -6488,7 +6488,7 @@ var PlacesAnalytics = (() => {
       }
       const returnHome = lastOutsideIndex < 0 ? void 0 : dayVisits.slice(lastOutsideIndex + 1).find((visit) => isHome3(placeById.get(visit.placeId)));
       const sequence = dayVisits.map((visit) => visit.placeId).filter((placeId, index, all) => index === 0 || all[index - 1] !== placeId);
-      const summary = buildSelectedDaySummary(date, timeZone, places, visits, journeys);
+      const summary = buildSelectedDaySummary(date, timeZone, places, dayVisits, dayJourneys);
       return {
         date,
         dayOfWeek: qi.PlainDate.from(date).dayOfWeek,

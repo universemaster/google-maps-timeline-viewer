@@ -1856,6 +1856,16 @@
                     <div id="journeyAnalyticsDetail"><p>Select a journey to inspect it.</p></div>
                 </div>
             </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Routines and unusual days</h3><p>Retrospective patterns and departures from them, with numerical evidence rather than live alerts.</p></div></div>
+                <div id="selectedDayAnomalies"></div>
+                <h4>Typical week</h4>
+                <div id="routineWeekTable"></div>
+                <h4>Repeated day sequences</h4>
+                <div id="routineSequences"></div>
+                <h4>Most interesting findings</h4>
+                <div id="anomalyFeed" class="suggestion-grid"></div>
+            </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
                 <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
@@ -8364,6 +8374,27 @@ Departed: ${end}</description>
         list.querySelector('[data-journey-index]')?.click();
     }
 
+    function formatMinuteOfDay(value) {
+        if (value === null || !Number.isFinite(value)) return '—';
+        const hours = Math.floor(value / 60) % 24;
+        const minutes = Math.round(value % 60);
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    function renderRoutineAnalysis(canonical, timeZone, selectedDate) {
+        const routine = PlacesAnalytics.buildRoutineAnalysis(timeZone, canonical.places, canonical.visits, canonical.journeys);
+        const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const placeById = new Map(canonical.places.map(place => [place.id, place]));
+        document.getElementById('routineWeekTable').innerHTML = `<table class="profile-table"><thead><tr><th>Day</th><th>Usually leave</th><th>Usually return</th><th>Time outside</th><th>Places</th><th>Days sampled</th></tr></thead><tbody>${routine.weekdays.map(row => `<tr><td>${dayNames[row.dayOfWeek - 1]}</td><td>${formatMinuteOfDay(row.departureMinute.p25)}–${formatMinuteOfDay(row.departureMinute.p75)}<br><small>median ${formatMinuteOfDay(row.departureMinute.median)}</small></td><td>${formatMinuteOfDay(row.returnMinute.p25)}–${formatMinuteOfDay(row.returnMinute.p75)}<br><small>median ${formatMinuteOfDay(row.returnMinute.median)}</small></td><td>${formatAnalyticsDuration(row.timeOutsideHomeMs.p25)}–${formatAnalyticsDuration(row.timeOutsideHomeMs.p75)}</td><td>${row.placesVisited.median === null ? '—' : Number(row.placesVisited.median).toFixed(1)}</td><td>${row.observations}</td></tr>`).join('')}</tbody></table>`;
+        document.getElementById('routineSequences').innerHTML = routine.overall.commonSequences.length ? routine.overall.commonSequences.map(sequence => `<p>${sequence.placeIds.map(id => escapeHtml(placeById.get(id)?.name || 'Unknown')).join(' → ')} <small>(${sequence.count} days)</small></p>`).join('') : '<p>Not enough repeated sequences yet.</p>';
+        const selectedFindings = PlacesAnalytics.detectDayAnomalies(selectedDate, routine);
+        document.getElementById('selectedDayAnomalies').innerHTML = selectedFindings.length ? `<div class="quality-issue warning"><strong>${selectedFindings.length} unusual feature${selectedFindings.length === 1 ? '' : 's'} on the selected day</strong>${selectedFindings.map(item => `<p>${escapeHtml(item.title)} · ${escapeHtml(item.explanation)} Confidence ${Math.round(item.confidence)}/100.</p>`).join('')}</div>` : '<p class="quality-issue good"><strong>Selected day looks typical</strong><br>No metric fell into the outer 10% of at least four earlier matching weekdays.</p>';
+        const findings = PlacesAnalytics.detectAllAnomalies(timeZone, routine, canonical.places, canonical.visits, canonical.journeys);
+        const interestingness = item => ({ extreme: 300, unusual: 200, notable: 100 }[item.severity] || 0) + item.confidence + Math.abs(item.percentileRank - 50);
+        findings.sort((a, b) => interestingness(b) - interestingness(a) || b.date.localeCompare(a.date));
+        document.getElementById('anomalyFeed').innerHTML = findings.length ? findings.slice(0, 24).map(item => `<article class="suggestion-card"><div class="suggestion-heading"><div><strong>${escapeHtml(item.title)}</strong><br><small>${moment(item.date).format('D MMMM YYYY')} · ${item.severity}</small></div><span class="confidence-badge">${Math.round(item.confidence)}/100</span></div><p>${escapeHtml(item.explanation)}</p><p><small>Compared with: ${item.comparableDates.map(date => moment(date).format('D MMM YYYY')).join(', ') || 'no earlier examples'}</small></p></article>`).join('') : '<p>No robust anomaly findings yet. At least five comparable historical events are needed for event-level findings.</p>';
+    }
+
     function discoverySettings() {
         let saved = {};
         try { saved = JSON.parse(localStorage.getItem('places.discovery.settings') || '{}'); } catch (_) {}
@@ -8525,6 +8556,7 @@ Departed: ${end}</description>
         renderDataQuality(canonical, timeZone);
         await renderSuggestedPlaces(canonical, timeZone);
         renderJourneyAnalytics(canonical);
+        renderRoutineAnalysis(canonical, timeZone, selectedDate);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';

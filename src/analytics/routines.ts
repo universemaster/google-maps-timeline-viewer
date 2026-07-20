@@ -113,7 +113,7 @@ export function buildRoutineAnalysis(
     }
     const returnHome = lastOutsideIndex < 0 ? undefined : dayVisits.slice(lastOutsideIndex + 1).find(visit => isHome(placeById.get(visit.placeId)));
     const sequence = dayVisits.map(visit => visit.placeId).filter((placeId, index, all) => index === 0 || all[index - 1] !== placeId);
-    const summary = buildSelectedDaySummary(date, timeZone, places, visits, journeys);
+    const summary = buildSelectedDaySummary(date, timeZone, places, dayVisits, dayJourneys);
     return {
       date,
       dayOfWeek: Temporal.PlainDate.from(date).dayOfWeek,
