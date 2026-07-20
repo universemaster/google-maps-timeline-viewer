@@ -6,3 +6,4 @@ export { buildDataQualitySummary } from "./analytics/data-quality.js";
 export { scoreVisit, scoreJourney } from "./analytics/confidence.js";
 export { summarizeDistribution, percentile, percentileRank, movingAverage } from "./analytics/statistics.js";
 export { dayInterval, localParts } from "./analytics/time.js";
+export { buildReplayPlan, replayStateAt, nextPausePoint } from "./analytics/replay.js";

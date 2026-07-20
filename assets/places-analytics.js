@@ -1079,14 +1079,17 @@ var PlacesAnalytics = (() => {
   __export(browser_api_exports, {
     buildDataQualitySummary: () => buildDataQualitySummary,
     buildPlaceProfile: () => buildPlaceProfile,
+    buildReplayPlan: () => buildReplayPlan,
     buildSelectedDaySummary: () => buildSelectedDaySummary,
     dayInterval: () => dayInterval,
     detectTimelineFormat: () => detectTimelineFormat,
     localParts: () => localParts,
     movingAverage: () => movingAverage,
+    nextPausePoint: () => nextPausePoint,
     normalizeTimeline: () => normalizeTimeline,
     percentile: () => percentile,
     percentileRank: () => percentileRank,
+    replayStateAt: () => replayStateAt,
     scoreJourney: () => scoreJourney,
     scoreVisit: () => scoreVisit,
     summarizeDistribution: () => summarizeDistribution
@@ -5663,8 +5666,8 @@ var PlacesAnalytics = (() => {
       const first = firstVisitByPlace.get(placeId);
       return first ? localParts(first, timeZone).date === date : false;
     }).length;
-    const walking = dayJourneys.filter(({ journey }) => /WALK/i.test(journey.travelMode));
-    const publicTransport = dayJourneys.filter(({ journey }) => /(BUS|TRAIN|RAIL|TRAM|SUBWAY|TRANSIT|FERRY)/i.test(journey.travelMode));
+    const walking2 = dayJourneys.filter(({ journey }) => /WALK/i.test(journey.travelMode));
+    const publicTransport2 = dayJourneys.filter(({ journey }) => /(BUS|TRAIN|RAIL|TRAM|SUBWAY|TRANSIT|FERRY)/i.test(journey.travelMode));
     const dayLengthMs = day.endMs - day.startMs;
     return {
       date,
@@ -5675,9 +5678,9 @@ var PlacesAnalytics = (() => {
       totalDistanceMeters: dayJourneys.reduce((sum, { journey }) => sum + (journey.distanceMeters ?? 0), 0),
       placesVisited: visitedPlaceIds.size,
       journeys: dayJourneys.length,
-      walkingDistanceMeters: walking.reduce((sum, { journey }) => sum + (journey.distanceMeters ?? 0), 0),
-      walkingDurationMs: coveredMilliseconds(walking.map(({ interval: interval2 }) => interval2)),
-      publicTransportDurationMs: coveredMilliseconds(publicTransport.map(({ interval: interval2 }) => interval2)),
+      walkingDistanceMeters: walking2.reduce((sum, { journey }) => sum + (journey.distanceMeters ?? 0), 0),
+      walkingDurationMs: coveredMilliseconds(walking2.map(({ interval: interval2 }) => interval2)),
+      publicTransportDurationMs: coveredMilliseconds(publicTransport2.map(({ interval: interval2 }) => interval2)),
       stationaryDurationMs: coveredMilliseconds(dayVisits.map(({ interval: interval2 }) => interval2)),
       newPlaces,
       repeatPlaces: visitedPlaceIds.size - newPlaces,
@@ -5753,6 +5756,121 @@ var PlacesAnalytics = (() => {
       journeyConfidence: summarizeDistribution(journeys.map((journey) => scoreJourney(journey).score)),
       mostRecentImportedDataDate: timestamps.at(-1) ?? null
     };
+  }
+
+  // src/analytics/replay.ts
+  function isHome2(place) {
+    return Boolean(place && (place.semanticType?.toUpperCase() === "HOME" || place.name.trim().toLowerCase() === "home"));
+  }
+  function publicTransport(mode) {
+    return /(BUS|TRAIN|RAIL|TRAM|SUBWAY|TRANSIT|FERRY)/i.test(mode);
+  }
+  function walking(mode) {
+    return /WALK|ON_FOOT/i.test(mode);
+  }
+  function clippedInterval(start, end, lower, upper) {
+    if (!start || !end) return null;
+    const startMs = Math.max(Date.parse(start), lower);
+    const endMs = Math.min(Date.parse(end), upper);
+    return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs ? { startMs, endMs } : null;
+  }
+  function routeBounds(journeys) {
+    const points = journeys.flatMap((journey) => journey.path.map((point) => point.coordinates));
+    if (points.length === 0) return null;
+    return {
+      minimum: {
+        latitude: Math.min(...points.map((point) => point.latitude)),
+        longitude: Math.min(...points.map((point) => point.longitude))
+      },
+      maximum: {
+        latitude: Math.max(...points.map((point) => point.latitude)),
+        longitude: Math.max(...points.map((point) => point.longitude))
+      }
+    };
+  }
+  function buildReplayPlan(date, timeZone, places, visits, journeys, longGapMs = 60 * 6e4) {
+    const day = dayInterval(date, timeZone);
+    const placeById = new Map(places.map((place) => [place.id, place]));
+    const segments = [
+      ...visits.flatMap((visit) => {
+        const clipped2 = clippedInterval(visit.interval.start, visit.interval.end, day.startMs, day.endMs);
+        return clipped2 ? [{ kind: "visit", ...clipped2, visit, place: placeById.get(visit.placeId) ?? null }] : [];
+      }),
+      ...journeys.flatMap((journey) => {
+        const clipped2 = clippedInterval(journey.interval.start, journey.interval.end, day.startMs, day.endMs);
+        return clipped2 ? [{ kind: "journey", ...clipped2, journey }] : [];
+      })
+    ].sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
+    const pausePoints = [];
+    segments.forEach((segment, index) => {
+      if (segment.kind === "visit") {
+        pausePoints.push({ atMs: segment.startMs, reason: "arrival", description: `Arrived at ${segment.place?.name ?? "a place"}` });
+        pausePoints.push({ atMs: segment.endMs, reason: "departure", description: `Left ${segment.place?.name ?? "a place"}` });
+      }
+      const previous = segments[index - 1];
+      if (previous && segment.startMs - previous.endMs >= longGapMs) {
+        pausePoints.push({ atMs: previous.endMs, reason: "long-gap", description: `Tracking gap of ${Math.round((segment.startMs - previous.endMs) / 6e4)} minutes` });
+      }
+      if (previous?.kind === "journey" && segment.kind === "journey" && previous.journey.travelMode !== segment.journey.travelMode) {
+        pausePoints.push({ atMs: segment.startMs, reason: "mode-change", description: `Travel mode changed to ${segment.journey.travelMode}` });
+      }
+    });
+    pausePoints.sort((left, right) => left.atMs - right.atMs);
+    return { date, timeZone, startMs: day.startMs, endMs: day.endMs, segments, pausePoints, routeBounds: routeBounds(journeys) };
+  }
+  function interpolate(left, right, progress) {
+    return {
+      latitude: left.latitude + (right.latitude - left.latitude) * progress,
+      longitude: left.longitude + (right.longitude - left.longitude) * progress
+    };
+  }
+  function coordinatesAt(segment, atMs) {
+    if (segment.kind === "visit") return segment.visit.coordinates ?? segment.place?.coordinates ?? null;
+    const path = segment.journey.path;
+    if (path.length === 0) return null;
+    if (path.length === 1) return path[0]?.coordinates ?? null;
+    const progress = Math.max(0, Math.min(1, (atMs - segment.startMs) / (segment.endMs - segment.startMs)));
+    const scaled = progress * (path.length - 1);
+    const index = Math.min(path.length - 2, Math.floor(scaled));
+    return interpolate(path[index].coordinates, path[index + 1].coordinates, scaled - index);
+  }
+  function replayStateAt(plan, atMs) {
+    const boundedAt = Math.max(plan.startMs, Math.min(plan.endMs, atMs));
+    const activeSegment = plan.segments.find((segment) => boundedAt >= segment.startMs && boundedAt < segment.endMs) ?? null;
+    let cumulativeDistanceMeters = 0;
+    let cumulativeOutsideHomeMs = 0;
+    let cumulativeWalkingMs = 0;
+    let cumulativePublicTransportMs = 0;
+    let cumulativeStationaryMs = 0;
+    plan.segments.forEach((segment) => {
+      const elapsed = Math.max(0, Math.min(boundedAt, segment.endMs) - segment.startMs);
+      if (elapsed <= 0) return;
+      const segmentDuration = segment.endMs - segment.startMs;
+      if (segment.kind === "visit") {
+        cumulativeStationaryMs += elapsed;
+        if (!isHome2(segment.place)) cumulativeOutsideHomeMs += elapsed;
+      } else {
+        cumulativeOutsideHomeMs += elapsed;
+        cumulativeDistanceMeters += (segment.journey.distanceMeters ?? 0) * elapsed / segmentDuration;
+        if (walking(segment.journey.travelMode)) cumulativeWalkingMs += elapsed;
+        if (publicTransport(segment.journey.travelMode)) cumulativePublicTransportMs += elapsed;
+      }
+    });
+    return {
+      atMs: boundedAt,
+      progress: (boundedAt - plan.startMs) / (plan.endMs - plan.startMs),
+      activeSegment,
+      coordinates: activeSegment ? coordinatesAt(activeSegment, boundedAt) : null,
+      elapsedInSegmentMs: activeSegment ? boundedAt - activeSegment.startMs : 0,
+      cumulativeDistanceMeters,
+      cumulativeOutsideHomeMs,
+      cumulativeWalkingMs,
+      cumulativePublicTransportMs,
+      cumulativeStationaryMs
+    };
+  }
+  function nextPausePoint(plan, afterMs, enabledReasons) {
+    return plan.pausePoints.find((point) => point.atMs > afterMs && enabledReasons.has(point.reason)) ?? null;
   }
   return __toCommonJS(browser_api_exports);
 })();
