@@ -2,12 +2,14 @@ import type { CanonicalTimeline } from "../model/types.js";
 import { detectAllAnomalies } from "./anomalies.js";
 import { buildDataQualityDashboard } from "./data-quality.js";
 import { buildRoutineAnalysis } from "./routines.js";
+import { buildSelectedDayContext } from "./selected-day-context.js";
 
-export interface IntelligenceWorkerInput { timeline: CanonicalTimeline; timeZone: string }
+export interface IntelligenceWorkerInput { timeline: CanonicalTimeline; timeZone: string; selectedDate?: string }
 export interface IntelligenceWorkerResult {
   routine: ReturnType<typeof buildRoutineAnalysis>;
   anomalies: ReturnType<typeof detectAllAnomalies>;
   dataQuality: ReturnType<typeof buildDataQualityDashboard>;
+  selectedDayContext: ReturnType<typeof buildSelectedDayContext> | null;
 }
 export interface WorkerProgress { progress: number; stage: string }
 
@@ -24,6 +26,7 @@ export async function calculateIntelligenceJob(input: IntelligenceWorkerInput, r
   if (isCancelled()) throw new DOMException("Analysis cancelled", "AbortError");
   await Promise.resolve();
   const dataQuality = buildDataQualityDashboard(input.timeline.places, input.timeline.visits, input.timeline.journeys, input.timeZone);
+  const selectedDayContext = input.selectedDate ? buildSelectedDayContext(input.selectedDate, input.timeZone, input.timeline.places, input.timeline.visits, input.timeline.journeys) : null;
   report({ progress: 1, stage: "Analysis ready" });
-  return { routine, anomalies, dataQuality };
+  return { routine, anomalies, dataQuality, selectedDayContext };
 }

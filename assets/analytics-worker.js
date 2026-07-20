@@ -5216,6 +5216,12 @@
   function median(values) {
     return percentile(values, 0.5);
   }
+  function percentileRank(values, value) {
+    if (values.length === 0) return null;
+    const below = values.filter((candidate) => candidate < value).length;
+    const equal = values.filter((candidate) => candidate === value).length;
+    return (below + equal * 0.5) / values.length * 100;
+  }
   function summarizeDistribution(values) {
     const finite = values.filter(Number.isFinite);
     const p25 = percentile(finite, 0.25);
@@ -5647,6 +5653,46 @@
     };
   }
 
+  // src/analytics/selected-day-context.ts
+  var METRICS = ["timeAtHomeMs", "timeOutsideHomeMs", "totalDistanceMeters", "placesVisited", "journeys", "walkingDurationMs", "publicTransportDurationMs", "trackingCoveragePercent", "largestTrackingGapMs"];
+  function comparison(label, target, values) {
+    const baseline = median(values);
+    if (baseline === null) return { label, sampleSize: 0, value: null, difference: null, percentageDifference: null };
+    const difference = target - baseline;
+    return { label, sampleSize: values.length, value: baseline, difference, percentageDifference: baseline === 0 ? null : difference / baseline * 100 };
+  }
+  function buildSelectedDayContext(date, timeZone, places, visits, journeys) {
+    const selected = buildSelectedDaySummary(date, timeZone, places, visits, journeys);
+    const targetDate = qi.PlainDate.from(date);
+    const earliestTimestamp = [...visits, ...journeys].flatMap((event) => event.interval.start ? [event.interval.start] : []).sort()[0];
+    const earliestDate = earliestTimestamp ? qi.PlainDate.from(localParts(earliestTimestamp, timeZone).date) : targetDate;
+    const history = [];
+    for (let cursor = earliestDate; qi.PlainDate.compare(cursor, targetDate) < 0; cursor = cursor.add({ days: 1 })) history.push(buildSelectedDaySummary(cursor.toString(), timeZone, places, visits, journeys));
+    const targetDayOfWeek = targetDate.dayOfWeek;
+    const sameWeekday = history.filter((row) => qi.PlainDate.from(row.date).dayOfWeek === targetDayOfWeek);
+    const previousTwelve = sameWeekday.slice(-12);
+    const targetMonth = date.slice(0, 7);
+    const sameMonth = history.filter((row) => row.date.slice(0, 7) === targetMonth);
+    const targetYear = date.slice(0, 4);
+    const sameYear = history.filter((row) => row.date.slice(0, 4) === targetYear);
+    const previousDay = history.filter((row) => row.date === targetDate.subtract({ days: 1 }).toString());
+    const previousWeek = history.filter((row) => row.date === targetDate.subtract({ weeks: 1 }).toString());
+    return {
+      selected,
+      metrics: METRICS.map((key) => {
+        const value = selected[key];
+        const historical = history.map((row) => row[key]);
+        return {
+          key,
+          value,
+          percentileRank: percentileRank(historical, value),
+          historicalSampleSize: historical.length,
+          comparisons: [comparison("Previous day", value, previousDay.map((row) => row[key])), comparison("Same weekday last week", value, previousWeek.map((row) => row[key])), comparison("Previous 12 matching weekdays", value, previousTwelve.map((row) => row[key])), comparison("Monthly median", value, sameMonth.map((row) => row[key])), comparison("Annual median", value, sameYear.map((row) => row[key]))]
+        };
+      })
+    };
+  }
+
   // src/analytics/worker-jobs.ts
   async function calculateIntelligenceJob(input, report = () => {
   }, isCancelled = () => false) {
@@ -5662,8 +5708,9 @@
     if (isCancelled()) throw new DOMException("Analysis cancelled", "AbortError");
     await Promise.resolve();
     const dataQuality = buildDataQualityDashboard(input.timeline.places, input.timeline.visits, input.timeline.journeys, input.timeZone);
+    const selectedDayContext = input.selectedDate ? buildSelectedDayContext(input.selectedDate, input.timeZone, input.timeline.places, input.timeline.visits, input.timeline.journeys) : null;
     report({ progress: 1, stage: "Analysis ready" });
-    return { routine, anomalies, dataQuality };
+    return { routine, anomalies, dataQuality, selectedDayContext };
   }
 
   // src/workers/analytics.worker.ts

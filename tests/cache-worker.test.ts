@@ -23,6 +23,7 @@ describe("versioned analytics cache and worker jobs", () => {
     expect(progress).toEqual([0.05, 0.5, 0.78, 1]);
     expect(result.routine.observations).toEqual([]);
     expect(result.anomalies).toEqual([]);
+    expect(result.selectedDayContext).toBeNull();
   });
 
   it("honours cancellation before work begins", async () => {

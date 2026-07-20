@@ -20,3 +20,4 @@ export { searchTimeline } from "./analytics/search.js";
 export { buildPeriodSummary } from "./analytics/period-summary.js";
 export { ANALYTICS_VERSION, buildAnalyticsCacheKey } from "./analytics/cache.js";
 export { calculateIntelligenceJob } from "./analytics/worker-jobs.js";
+export { buildSelectedDayContext, buildDayEventFeed } from "./analytics/selected-day-context.js";
