@@ -1891,11 +1891,30 @@
                     <label>Place<select id="searchPlace"><option value="">Any place</option></select></label>
                     <label>Category<select id="searchCategory"><option value="">Any category</option></select></label>
                     <label>Minimum visit (minutes)<input id="searchVisitMinutes" type="number" min="0"></label>
+                    <label>Maximum visit (minutes)<input id="searchVisitMaxMinutes" type="number" min="0"></label>
+                    <label>Arrive after<input id="searchArrivalAfter" type="time"></label>
+                    <label>Arrive before<input id="searchArrivalBefore" type="time"></label>
+                    <label>Leave after<input id="searchDepartureAfter" type="time"></label>
+                    <label>Leave before<input id="searchDepartureBefore" type="time"></label>
+                    <label>Weekdays<select id="searchWeekdays" multiple size="4"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option></select></label>
                     <label>Purpose<select id="searchPurpose"><option value="">Any purpose</option></select></label>
+                    <label>Tag<input id="searchTag" placeholder="productive"></label>
+                    <label>Minimum spending<input id="searchSpendingMin" type="number" min="0" step="0.01"></label>
+                    <label>Maximum spending<input id="searchSpendingMax" type="number" min="0" step="0.01"></label>
+                    <label>Minimum revisit interval (days)<input id="searchRevisitDays" type="number" min="0"></label>
                     <label>Travel mode<select id="searchTravelMode"><option value="">Any mode</option></select></label>
                     <label>Minimum journey (km)<input id="searchJourneyKm" type="number" min="0" step="0.1"></label>
+                    <label>Maximum journey (km)<input id="searchJourneyMaxKm" type="number" min="0" step="0.1"></label>
+                    <label>Minimum journey (minutes)<input id="searchJourneyMinutes" type="number" min="0"></label>
+                    <label>Maximum journey (minutes)<input id="searchJourneyMaxMinutes" type="number" min="0"></label>
+                    <label>Minimum confidence<input id="searchConfidenceMin" type="number" min="0" max="100"></label>
                     <label>Maximum confidence<input id="searchConfidence" type="number" min="0" max="100"></label>
                     <label>Annotation<select id="searchAnnotated"><option value="">Either</option><option value="true">Annotated only</option><option value="false">Unannotated only</option></select></label>
+                    <label>Unknown place<select id="searchUnknown"><option value="">Either</option><option value="true">Unknown only</option><option value="false">Known only</option></select></label>
+                    <label>First-ever visit<select id="searchNewPlace"><option value="">Either</option><option value="true">New places only</option><option value="false">Revisits only</option></select></label>
+                    <label>Area latitude<input id="searchLatitude" type="number" step="0.000001"></label>
+                    <label>Area longitude<input id="searchLongitude" type="number" step="0.000001"></label>
+                    <label>Area radius (metres)<input id="searchRadius" type="number" min="1"></label>
                 </div>
                 <div class="replay-toolbar"><button id="applyAdvancedSearch" class="primary">Apply filters</button><button id="clearAdvancedSearch">Clear</button><span id="searchStatus"></span></div>
                 <div id="searchResults" class="visit-correction-list"></div>
@@ -8580,15 +8599,27 @@ Departed: ${end}</description>
         mode.innerHTML = '<option value="">Any mode</option>' + [...new Set(canonical.journeys.map(item => item.travelMode))].sort().map(value => `<option>${escapeHtml(value)}</option>`).join('');
         const run = () => {
             const numberOrUndefined = id => { const value = document.getElementById(id).value; return value === '' ? undefined : Number(value); };
+            const minuteOrUndefined = id => { const value = document.getElementById(id).value; if (!value) return undefined; const [hour, minute] = value.split(':').map(Number); return hour * 60 + minute; };
+            const optionalBoolean = id => { const value = document.getElementById(id).value; return value === '' ? undefined : value === 'true'; };
             const annotatedValue = document.getElementById('searchAnnotated').value;
+            const latitude = numberOrUndefined('searchLatitude'); const longitude = numberOrUndefined('searchLongitude'); const radius = numberOrUndefined('searchRadius');
             const query = {
                 dateRange: { start: document.getElementById('startDatePicker').value, end: document.getElementById('endDatePicker').value },
                 placeIds: place.value ? [place.value] : undefined, placeCategories: category.value ? [category.value] : undefined,
-                visitDurationMs: numberOrUndefined('searchVisitMinutes') === undefined ? undefined : { minimum: numberOrUndefined('searchVisitMinutes') * 60000 },
+                visitDurationMs: numberOrUndefined('searchVisitMinutes') === undefined && numberOrUndefined('searchVisitMaxMinutes') === undefined ? undefined : { minimum: numberOrUndefined('searchVisitMinutes') === undefined ? undefined : numberOrUndefined('searchVisitMinutes') * 60000, maximum: numberOrUndefined('searchVisitMaxMinutes') === undefined ? undefined : numberOrUndefined('searchVisitMaxMinutes') * 60000 },
+                arrivalMinute: minuteOrUndefined('searchArrivalAfter') === undefined && minuteOrUndefined('searchArrivalBefore') === undefined ? undefined : { minimum: minuteOrUndefined('searchArrivalAfter'), maximum: minuteOrUndefined('searchArrivalBefore') },
+                departureMinute: minuteOrUndefined('searchDepartureAfter') === undefined && minuteOrUndefined('searchDepartureBefore') === undefined ? undefined : { minimum: minuteOrUndefined('searchDepartureAfter'), maximum: minuteOrUndefined('searchDepartureBefore') },
+                daysOfWeek: [...document.getElementById('searchWeekdays').selectedOptions].map(option => Number(option.value)).length ? [...document.getElementById('searchWeekdays').selectedOptions].map(option => Number(option.value)) : undefined,
                 purposes: purpose.value ? [purpose.value] : undefined, travelModes: mode.value ? [mode.value] : undefined,
-                journeyDistanceMeters: numberOrUndefined('searchJourneyKm') === undefined ? undefined : { minimum: numberOrUndefined('searchJourneyKm') * 1000 },
-                confidence: numberOrUndefined('searchConfidence') === undefined ? undefined : { maximum: numberOrUndefined('searchConfidence') },
+                tags: document.getElementById('searchTag').value.trim() ? [document.getElementById('searchTag').value.trim()] : undefined,
+                spending: numberOrUndefined('searchSpendingMin') === undefined && numberOrUndefined('searchSpendingMax') === undefined ? undefined : { minimum: numberOrUndefined('searchSpendingMin'), maximum: numberOrUndefined('searchSpendingMax') },
+                revisitIntervalMs: numberOrUndefined('searchRevisitDays') === undefined ? undefined : { minimum: numberOrUndefined('searchRevisitDays') * 86400000 },
+                journeyDistanceMeters: numberOrUndefined('searchJourneyKm') === undefined && numberOrUndefined('searchJourneyMaxKm') === undefined ? undefined : { minimum: numberOrUndefined('searchJourneyKm') === undefined ? undefined : numberOrUndefined('searchJourneyKm') * 1000, maximum: numberOrUndefined('searchJourneyMaxKm') === undefined ? undefined : numberOrUndefined('searchJourneyMaxKm') * 1000 },
+                journeyDurationMs: numberOrUndefined('searchJourneyMinutes') === undefined && numberOrUndefined('searchJourneyMaxMinutes') === undefined ? undefined : { minimum: numberOrUndefined('searchJourneyMinutes') === undefined ? undefined : numberOrUndefined('searchJourneyMinutes') * 60000, maximum: numberOrUndefined('searchJourneyMaxMinutes') === undefined ? undefined : numberOrUndefined('searchJourneyMaxMinutes') * 60000 },
+                confidence: numberOrUndefined('searchConfidenceMin') === undefined && numberOrUndefined('searchConfidence') === undefined ? undefined : { minimum: numberOrUndefined('searchConfidenceMin'), maximum: numberOrUndefined('searchConfidence') },
                 annotated: annotatedValue === '' ? undefined : annotatedValue === 'true',
+                unknownPlace: optionalBoolean('searchUnknown'), newPlace: optionalBoolean('searchNewPlace'),
+                geographicArea: latitude === undefined || longitude === undefined || radius === undefined ? undefined : { kind: 'circle', centre: { latitude, longitude }, radiusMeters: radius },
             };
             const result = PlacesAnalytics.searchTimeline(query, getSelectedTimezone(), canonical.places, canonical.visits, canonical.journeys, canonical.annotations);
             document.getElementById('searchStatus').textContent = `${result.visits.length} visits · ${result.journeys.length} journeys · ${result.places.length} places`;
@@ -8600,7 +8631,7 @@ Departed: ${end}</description>
             document.getElementById('searchResults').innerHTML = entries.map(item => `<div class="visit-correction-row"><span>${item.at ? formatTimestamp(item.at, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${escapeHtml(item.text)}</span></div>`).join('') || '<p>No matching visits or journeys.</p>';
         };
         document.getElementById('applyAdvancedSearch').onclick = run;
-        document.getElementById('clearAdvancedSearch').onclick = () => { ['searchPlace', 'searchCategory', 'searchVisitMinutes', 'searchPurpose', 'searchTravelMode', 'searchJourneyKm', 'searchConfidence', 'searchAnnotated'].forEach(id => document.getElementById(id).value = ''); run(); };
+        document.getElementById('clearAdvancedSearch').onclick = () => { ['searchPlace', 'searchCategory', 'searchVisitMinutes', 'searchVisitMaxMinutes', 'searchArrivalAfter', 'searchArrivalBefore', 'searchDepartureAfter', 'searchDepartureBefore', 'searchPurpose', 'searchTag', 'searchSpendingMin', 'searchSpendingMax', 'searchRevisitDays', 'searchTravelMode', 'searchJourneyKm', 'searchJourneyMaxKm', 'searchJourneyMinutes', 'searchJourneyMaxMinutes', 'searchConfidenceMin', 'searchConfidence', 'searchAnnotated', 'searchUnknown', 'searchNewPlace', 'searchLatitude', 'searchLongitude', 'searchRadius'].forEach(id => document.getElementById(id).value = ''); [...document.getElementById('searchWeekdays').options].forEach(option => option.selected = false); run(); };
         run();
     }
 
