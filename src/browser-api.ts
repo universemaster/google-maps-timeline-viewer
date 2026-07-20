@@ -18,3 +18,5 @@ export { detectDayAnomalies, detectVisitAnomalies, detectJourneyAnomalies, detec
 export { comparePlaces, compareJourneys } from "./analytics/comparisons.js";
 export { searchTimeline } from "./analytics/search.js";
 export { buildPeriodSummary } from "./analytics/period-summary.js";
+export { ANALYTICS_VERSION, buildAnalyticsCacheKey } from "./analytics/cache.js";
+export { calculateIntelligenceJob } from "./analytics/worker-jobs.js";

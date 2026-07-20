@@ -58,6 +58,12 @@ async function getAll<T>(storeName: string): Promise<T[]> {
   finally { database.close(); }
 }
 
+async function get<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+  const database = await openPlacesDatabase();
+  try { return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).get(key)) as T | undefined; }
+  finally { database.close(); }
+}
+
 export const placesPersistence = {
   putCorrection: (command: CorrectionCommand) => put("corrections", command),
   getCorrections: () => getAll<CorrectionCommand>("corrections"),
@@ -68,5 +74,6 @@ export const placesPersistence = {
   putSuggestionDecision: (decision: StoredSuggestionDecision) => put("suggestion-decisions", decision),
   getSuggestionDecisions: () => getAll<StoredSuggestionDecision>("suggestion-decisions"),
   putCache: <T>(record: AnalyticsCacheRecord<T>) => put("analytics-cache", record),
+  getCache: <T>(key: string) => get<AnalyticsCacheRecord<T>>("analytics-cache", key),
   getCacheRecords: <T>() => getAll<AnalyticsCacheRecord<T>>("analytics-cache"),
 };
