@@ -20,6 +20,16 @@ If you're like me, you have years worth of timeline data that you want to be abl
 - World view shows all of the countries and cities you've visited
 - Export to KML file
 - Mobile-friendly UI, so you can use this on your phone
+- Detailed place profiles with percentile distributions, journey context, data-quality evidence, and reversible correction tools
+- Selected-day intelligence, historical comparisons, event feed, and interactive movement replay
+- Automatic place discovery with locally persisted accept, merge, and ignore decisions
+- Journey and walking analytics, cautious public-transport inference, and side-by-side comparisons
+- Visit annotations, bulk tagging, spending and context fields, plus reusable automatic rules
+- Routine and anomaly analysis with numerical explanations and historical examples
+- Compound search across time, place, movement, annotations, confidence, revisit intervals, and geographic areas
+- Local-first background analytics with visible progress, cancellation, and versioned IndexedDB caching
+
+The analytical workspace uses only imported Timeline data and local browser storage. It does not add live tracking, sharing, crash detection, alerts, accounts, subscriptions, or a server-side personal-data service.
 
 <p align="center">
   <a href="/screenshot.png"><img src="/screenshot.png?raw=true" alt="Map View" width="48%"></a>
@@ -92,7 +102,8 @@ Without one, Google Maps rendering, area search, world view, and live Google pla
 
 ##  Final Set Up
 1. **Download The Google Maps Timeline Viewer:**
-    - Save this project's [timeline.html](https://raw.githubusercontent.com/kurupted/google-maps-timeline-viewer/refs/heads/main/timeline.html) file anywhere you like, either on your computer (eg in My Documents) or on your mobile device. (To save, copy/paste the text into eg Notepad, and save as "timeline.html")
+    - Download or clone the complete repository so that `timeline.html` and the `assets` folder remain together. The analytics code and background worker are stored in `assets/places-analytics.js` and `assets/analytics-worker.js`.
+    - For full worker support, serve the folder locally rather than opening only a copied HTML file. For example, run `python3 -m http.server 8765` in the repository folder and open `http://localhost:8765/timeline.html`.
    
 4. **Optional: Add your API key:**
    - Open the timeline.html file in a text editor and find the code below, near the top:
@@ -111,6 +122,20 @@ Without one, Google Maps rendering, area search, world view, and live Google pla
         - For Google Takeout data: The folder structure should be "Takeout\Location History (Timeline)\Semantic Location History". Once you are within the "Semantic Location History" folder, and see subfolders for each year, click "Select Folder" on the dialog. (Do not navigate into one of the year folders.)
         - For On-Device exported data: Simply choose the folder that contains your exported Timeline.json file.
     - Note that on Android you may not be allowed to load the data if it's in certain folders, such as Downloads -- move the data file to an accessible location.
+    - Once data are loaded, choose **Analyse** to open the continuously scrollable intelligence workspace. All corrections, annotations, suggestion decisions, and derived caches stay in local browser storage.
+
+## Development and verification
+
+The new analytics modules are TypeScript and remain separate from rendering code. To verify a checkout:
+
+```sh
+npm install
+npm run check
+npm test
+npm run build
+```
+
+The build produces both browser bundles in `assets/`. See [docs/architecture.md](docs/architecture.md) for the canonical model, correction log, worker, caching, and local-data boundaries.
 
 ## Note on API Usage & Billing
 - You can find the free usage limits, and over-the-limit pricing here: https://developers.google.com/maps/billing-and-pricing/pricing#places-pricing
