@@ -1465,6 +1465,22 @@
         .profile-table { width:100%; border-collapse:collapse; margin-top:10px; }
         .profile-table td { border-bottom:1px solid #edf0f5; padding:8px 4px; }
         .profile-table td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+        .replay-panel { margin-bottom:18px; }
+        .replay-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:10px 0; }
+        .replay-toolbar button, .replay-toolbar select, .replay-toolbar input { border:1px solid #cfd8e6; border-radius:7px; background:#fff; padding:7px 9px; }
+        .replay-toolbar button { cursor:pointer; font-weight:600; }
+        .replay-toolbar button.primary { background:#5a95f5; color:#fff; border-color:#5a95f5; }
+        #replayScrubber { width:100%; padding:0; accent-color:#5a95f5; }
+        .replay-stage { position:relative; height:250px; border-radius:12px; background:linear-gradient(145deg,#eef4fa,#e5edf7); overflow:hidden; }
+        #replayRoute { width:100%; height:100%; }
+        .replay-route-line { fill:none; stroke:#5a95f5; stroke-width:4; stroke-linecap:round; stroke-linejoin:round; opacity:.75; }
+        .replay-marker { fill:#ff7a45; stroke:white; stroke-width:3; filter:drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
+        .replay-status { position:absolute; left:12px; top:12px; padding:9px 11px; background:rgba(255,255,255,.94); border-radius:9px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+        .replay-status strong { display:block; font-size:18px; }
+        .replay-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin-top:10px; }
+        .replay-metric { background:#f7f9fc; border-radius:8px; padding:8px; }
+        .replay-metric small { display:block; color:#667085; }
+        .pause-options { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:#4b5565; }
         @media (max-width: 900px) { .intelligence-layout { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
     </style>
 </head>
@@ -1755,6 +1771,37 @@
                 <button id="closeIntelligenceBtn" class="control-btn">Back to map</button>
             </div>
             <section id="dailyIntelligenceCards" class="intelligence-grid"></section>
+            <section class="intelligence-panel replay-panel">
+                <div class="intelligence-header"><div><h3>Daily movement replay</h3><p>Replay visits and journeys using only your imported history.</p></div></div>
+                <div class="replay-toolbar">
+                    <button id="replayPreviousDay" title="Previous day">← Day</button>
+                    <input id="replayDate" type="date" aria-label="Replay date">
+                    <button id="replayNextDay" title="Next day">Day →</button>
+                    <button id="replayRestart" title="Restart">↺</button>
+                    <button id="replayBack" title="Jump back five minutes">−5 min</button>
+                    <button id="replayPlay" class="primary">▶ Play</button>
+                    <button id="replayForward" title="Jump forward five minutes">+5 min</button>
+                    <select id="replaySpeed" aria-label="Playback speed">
+                        <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option>
+                        <option value="5">5×</option><option value="10">10×</option><option value="30">30×</option>
+                    </select>
+                    <label>Compare <input id="replayCompareDate" type="date" aria-label="Compare replay date"></label>
+                </div>
+                <input id="replayScrubber" type="range" min="0" max="1000" value="0" aria-label="Replay time">
+                <div class="pause-options">
+                    <span>Pause at:</span>
+                    <label><input type="checkbox" data-replay-pause="arrival"> arrivals</label>
+                    <label><input type="checkbox" data-replay-pause="departure"> departures</label>
+                    <label><input type="checkbox" data-replay-pause="mode-change"> mode changes</label>
+                    <label><input type="checkbox" data-replay-pause="long-gap" checked> long gaps</label>
+                </div>
+                <div class="replay-stage">
+                    <svg id="replayRoute" viewBox="0 0 1000 250" preserveAspectRatio="none" aria-label="Recorded route replay"></svg>
+                    <div id="replayStatus" class="replay-status"><strong>Choose a day</strong><span>No replay loaded</span></div>
+                </div>
+                <div id="replayMetrics" class="replay-metrics"></div>
+                <div id="replayComparison" style="margin-top:10px"></div>
+            </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
                 <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
@@ -1913,6 +1960,7 @@
 	let visitsChartInstance = null;
 	let currentChartStartDate = null;
 	let currentChartEndDate = null;
+    let replayController = null;
 
     function hasConfiguredGoogleMapsApiKey() {
         const apiKey = (window.GOOGLE_MAPS_API_KEY || '').trim();
@@ -7877,6 +7925,139 @@ Departed: ${end}</description>
             </table>`;
     }
 
+    function replayPointProjector(plan) {
+        const bounds = plan.routeBounds;
+        if (!bounds) return () => ({ x: 500, y: 125 });
+        const longitudeSpan = Math.max(0.00001, bounds.maximum.longitude - bounds.minimum.longitude);
+        const latitudeSpan = Math.max(0.00001, bounds.maximum.latitude - bounds.minimum.latitude);
+        return coordinates => ({
+            x: 35 + (coordinates.longitude - bounds.minimum.longitude) / longitudeSpan * 930,
+            y: 225 - (coordinates.latitude - bounds.minimum.latitude) / latitudeSpan * 200,
+        });
+    }
+
+    function renderReplayRoute(controller) {
+        const svg = document.getElementById('replayRoute');
+        const project = replayPointProjector(controller.plan);
+        const lines = controller.plan.segments.filter(segment => segment.kind === 'journey' && segment.journey.path.length).map(segment => {
+            const points = segment.journey.path.map(point => {
+                const projected = project(point.coordinates);
+                return `${projected.x.toFixed(1)},${projected.y.toFixed(1)}`;
+            }).join(' ');
+            return `<polyline class="replay-route-line" points="${points}"></polyline>`;
+        }).join('');
+        const places = controller.plan.segments.filter(segment => segment.kind === 'visit').flatMap(segment => {
+            const coordinates = segment.visit.coordinates || segment.place?.coordinates;
+            if (!coordinates) return [];
+            const point = project(coordinates);
+            return [`<circle cx="${point.x}" cy="${point.y}" r="5" fill="#172b4d"><title>${escapeHtml(segment.place?.name || 'Place')}</title></circle>`];
+        }).join('');
+        svg.innerHTML = `${lines}${places}<circle id="replayMovingMarker" class="replay-marker" cx="-20" cy="-20" r="8"></circle>`;
+        controller.project = project;
+    }
+
+    function enabledReplayPauses() {
+        return new Set([...document.querySelectorAll('[data-replay-pause]:checked')].map(input => input.dataset.replayPause));
+    }
+
+    function updateReplayAt(atMs) {
+        const controller = replayController;
+        if (!controller) return;
+        controller.atMs = Math.max(controller.plan.startMs, Math.min(controller.plan.endMs, atMs));
+        const state = PlacesAnalytics.replayStateAt(controller.plan, controller.atMs);
+        document.getElementById('replayScrubber').value = String(Math.round(state.progress * 1000));
+        const active = state.activeSegment;
+        const title = active?.kind === 'visit' ? (active.place?.name || 'Unknown place') : active?.kind === 'journey' ? formatActivityType(active.journey.travelMode) : 'No recorded activity';
+        const detail = active ? `${active.kind === 'visit' ? 'At place' : 'Travelling'} · ${formatAnalyticsDuration(state.elapsedInSegmentMs)}` : 'Tracking gap';
+        document.getElementById('replayStatus').innerHTML = `<strong>${formatTimestamp(new Date(state.atMs).toISOString(), 'HH:mm')}</strong><span>${escapeHtml(title)} · ${detail}</span>`;
+        const marker = document.getElementById('replayMovingMarker');
+        if (marker && state.coordinates) {
+            const point = controller.project(state.coordinates);
+            marker.setAttribute('cx', point.x);
+            marker.setAttribute('cy', point.y);
+        } else if (marker) {
+            marker.setAttribute('cx', '-20');
+            marker.setAttribute('cy', '-20');
+        }
+        const metrics = [
+            ['Distance', formatDistance(state.cumulativeDistanceMeters)], ['Outside home', formatAnalyticsDuration(state.cumulativeOutsideHomeMs)],
+            ['Walking', formatAnalyticsDuration(state.cumulativeWalkingMs)], ['Public transport', formatAnalyticsDuration(state.cumulativePublicTransportMs)],
+            ['Stationary', formatAnalyticsDuration(state.cumulativeStationaryMs)],
+        ];
+        document.getElementById('replayMetrics').innerHTML = metrics.map(([label, value]) => `<div class="replay-metric"><small>${label}</small><strong>${value}</strong></div>`).join('');
+    }
+
+    function stopReplay() {
+        if (!replayController) return;
+        replayController.playing = false;
+        if (replayController.frame) cancelAnimationFrame(replayController.frame);
+        replayController.frame = null;
+        document.getElementById('replayPlay').textContent = '▶ Play';
+    }
+
+    function replayFrame(frameTime) {
+        const controller = replayController;
+        if (!controller?.playing) return;
+        if (!controller.lastFrame) controller.lastFrame = frameTime;
+        const elapsedReal = frameTime - controller.lastFrame;
+        controller.lastFrame = frameTime;
+        const speed = Number(document.getElementById('replaySpeed').value || 1);
+        let target = controller.atMs + elapsedReal * 60 * speed;
+        const pause = PlacesAnalytics.nextPausePoint(controller.plan, controller.atMs, enabledReplayPauses());
+        if (pause && pause.atMs <= target) {
+            target = pause.atMs;
+            updateReplayAt(target);
+            stopReplay();
+            document.getElementById('replayStatus').querySelector('span').textContent += ` · Paused: ${pause.description}`;
+            return;
+        }
+        updateReplayAt(target);
+        if (controller.atMs >= controller.plan.endMs) { stopReplay(); return; }
+        controller.frame = requestAnimationFrame(replayFrame);
+    }
+
+    function toggleReplay() {
+        if (!replayController) return;
+        if (replayController.playing) { stopReplay(); return; }
+        if (replayController.atMs >= replayController.plan.endMs) updateReplayAt(replayController.plan.startMs);
+        replayController.playing = true;
+        replayController.lastFrame = 0;
+        document.getElementById('replayPlay').textContent = '⏸ Pause';
+        replayController.frame = requestAnimationFrame(replayFrame);
+    }
+
+    function renderReplayComparison(controller) {
+        const compareDate = document.getElementById('replayCompareDate').value;
+        const container = document.getElementById('replayComparison');
+        if (!compareDate) { container.innerHTML = ''; return; }
+        const comparison = PlacesAnalytics.buildSelectedDaySummary(compareDate, controller.timeZone, controller.canonical.places, controller.canonical.visits, controller.canonical.journeys);
+        const selected = PlacesAnalytics.buildSelectedDaySummary(controller.date, controller.timeZone, controller.canonical.places, controller.canonical.visits, controller.canonical.journeys);
+        const signedDuration = value => `${value >= 0 ? '+' : '−'}${formatAnalyticsDuration(Math.abs(value))}`;
+        container.innerHTML = `<strong>Compared with ${moment(compareDate).format('D MMM YYYY')}</strong> · outside ${signedDuration(selected.timeOutsideHomeMs - comparison.timeOutsideHomeMs)}, distance ${selected.totalDistanceMeters - comparison.totalDistanceMeters >= 0 ? '+' : '−'}${formatDistance(Math.abs(selected.totalDistanceMeters - comparison.totalDistanceMeters))}, places ${selected.placesVisited - comparison.placesVisited >= 0 ? '+' : ''}${selected.placesVisited - comparison.placesVisited}`;
+    }
+
+    function loadReplay(canonical, date, timeZone) {
+        stopReplay();
+        const plan = PlacesAnalytics.buildReplayPlan(date, timeZone, canonical.places, canonical.visits, canonical.journeys);
+        replayController = { canonical, plan, date, timeZone, atMs: plan.startMs, playing: false, frame: null, lastFrame: 0, project: null };
+        document.getElementById('replayDate').value = date;
+        renderReplayRoute(replayController);
+        updateReplayAt(plan.startMs);
+        renderReplayComparison(replayController);
+    }
+
+    function initReplayControls() {
+        document.getElementById('replayPlay').addEventListener('click', toggleReplay);
+        document.getElementById('replayRestart').addEventListener('click', () => replayController && updateReplayAt(replayController.plan.startMs));
+        document.getElementById('replayBack').addEventListener('click', () => replayController && updateReplayAt(replayController.atMs - 5 * 60_000));
+        document.getElementById('replayForward').addEventListener('click', () => replayController && updateReplayAt(replayController.atMs + 5 * 60_000));
+        document.getElementById('replayScrubber').addEventListener('input', event => replayController && updateReplayAt(replayController.plan.startMs + Number(event.target.value) / 1000 * (replayController.plan.endMs - replayController.plan.startMs)));
+        document.getElementById('replayDate').addEventListener('change', event => replayController && loadReplay(replayController.canonical, event.target.value, replayController.timeZone));
+        document.getElementById('replayPreviousDay').addEventListener('click', () => replayController && loadReplay(replayController.canonical, moment(replayController.date).subtract(1, 'day').format('YYYY-MM-DD'), replayController.timeZone));
+        document.getElementById('replayNextDay').addEventListener('click', () => replayController && loadReplay(replayController.canonical, moment(replayController.date).add(1, 'day').format('YYYY-MM-DD'), replayController.timeZone));
+        document.getElementById('replayCompareDate').addEventListener('change', () => replayController && renderReplayComparison(replayController));
+    }
+
     function showIntelligenceView() {
         if (!uiEnabled) return;
         const canonical = buildCanonicalAnalyticsTimeline();
@@ -7905,6 +8086,7 @@ Departed: ${end}</description>
             renderPlaceProfile(profiles[Number(button.dataset.profileIndex)], canonical);
         }));
         if (profiles.length) list.querySelector('.place-analysis-row')?.click();
+        loadReplay(canonical, selectedDate, timeZone);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';
@@ -7917,6 +8099,7 @@ Departed: ${end}</description>
     }
 
     function initIntelligenceView() {
+        initReplayControls();
         document.getElementById('intelligenceBtn').addEventListener('click', showIntelligenceView);
         document.getElementById('closeIntelligenceBtn').addEventListener('click', () => {
             document.getElementById('intelligenceView').style.display = 'none';
