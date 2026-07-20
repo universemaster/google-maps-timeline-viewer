@@ -1499,7 +1499,14 @@
         .suggestion-card h4 { margin:0 0 4px; }
         .suggestion-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
         .suggestion-actions button, .suggestion-actions select { border:1px solid #cfd8e6; background:white; border-radius:6px; padding:6px 8px; cursor:pointer; }
-        @media (max-width: 900px) { .intelligence-layout, .quality-columns { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
+        .place-editor { margin-top:18px; border-top:2px solid #e8edf4; padding-top:12px; }
+        .place-editor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+        .place-editor label { color:#667085; font-size:12px; }
+        .place-editor input, .place-editor select, .place-editor textarea { width:100%; box-sizing:border-box; margin-top:3px; border:1px solid #cfd8e6; border-radius:6px; padding:7px; }
+        .visit-correction-list { max-height:240px; overflow:auto; border:1px solid #e1e6ee; border-radius:8px; }
+        .visit-correction-row { display:grid; grid-template-columns:auto 1fr minmax(130px,.7fr); gap:8px; align-items:center; padding:7px; border-bottom:1px solid #edf0f5; font-size:12px; }
+        .boundary-preview { margin:8px 0; padding:8px; background:#f3f6fa; border-radius:7px; font-size:12px; }
+        @media (max-width: 900px) { .intelligence-layout, .quality-columns, .place-editor-grid { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
     </style>
 </head>
 <body>
@@ -7943,10 +7950,27 @@ Departed: ${end}</description>
         ).join('')}</div>`;
     }
 
+    async function appendPlaceCorrection(command) {
+        const createdAt = new Date().toISOString();
+        const revision = Date.now();
+        await PlacesAnalytics.placesPersistence.putCorrection({
+            id: `correction_${crypto.randomUUID ? crypto.randomUUID() : `${revision}_${Math.random()}`}`,
+            createdAt,
+            revision,
+            ...command,
+        });
+    }
+
     function renderPlaceProfile(profile, canonical) {
         const panel = document.getElementById('placeProfilePanel');
         const previous = profile.commonPreviousPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
         const next = profile.commonNextPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
+        const placeVisits = canonical.visits.filter(visit => visit.placeId === profile.place.id).sort((a, b) => (b.interval.start || '').localeCompare(a.interval.start || ''));
+        const otherPlaces = canonical.places.filter(place => place.id !== profile.place.id && !place.ignored).sort((a, b) => a.name.localeCompare(b.name));
+        const placeOptions = otherPlaces.map(place => `<option value="${place.id}">${escapeHtml(place.name)}</option>`).join('');
+        const centre = profile.place.coordinates || { latitude: 0, longitude: 0 };
+        const radius = profile.place.boundary?.kind === 'circle' ? profile.place.boundary.radiusMeters : Math.max(25, Math.round(profile.coordinateSpreadMeters || 50));
+        const polygonText = profile.place.boundary?.kind === 'polygon' ? profile.place.boundary.vertices.map(point => `${point.latitude}, ${point.longitude}`).join('\n') : '';
         panel.innerHTML = `
             <h3>${escapeHtml(profile.place.name)}</h3>
             <p>${profile.trend === 'insufficient-data' ? 'Not enough history for a direction yet.' : `Visits are ${profile.trend} across recent years.`}</p>
@@ -7967,7 +7991,92 @@ Departed: ${end}</description>
                 <tr><td>Typical next places</td><td>${escapeHtml(next)}</td></tr>
                 <tr><td>Estimated coordinate spread</td><td>${profile.coordinateSpreadMeters === null ? '—' : `${Math.round(profile.coordinateSpreadMeters)} m`}</td></tr>
                 <tr><td>Low-confidence / uncertain visits</td><td>${profile.lowConfidenceVisits} / ${profile.uncertainTimes}</td></tr>
-            </table>`;
+            </table>
+            <section class="place-editor">
+                <h4>Correct this place</h4>
+                <div class="place-editor-grid">
+                    <label>Name<input id="placeEditName" value="${escapeHtml(profile.place.name)}"></label>
+                    <label>Category<input id="placeEditCategory" value="${escapeHtml(profile.place.category || '')}" placeholder="Cafe, library, shopping…"></label>
+                    <label>Latitude<input id="placeEditLatitude" type="number" step="0.000001" value="${centre.latitude}"></label>
+                    <label>Longitude<input id="placeEditLongitude" type="number" step="0.000001" value="${centre.longitude}"></label>
+                    <label>Boundary type<select id="placeBoundaryType"><option value="circle" ${profile.place.boundary?.kind !== 'polygon' ? 'selected' : ''}>Circle</option><option value="polygon" ${profile.place.boundary?.kind === 'polygon' ? 'selected' : ''}>Polygon</option></select></label>
+                    <label>Radius (metres)<input id="placeEditRadius" type="range" min="5" max="1000" value="${Math.min(1000, radius)}"><span id="placeRadiusValue">${Math.round(radius)} m</span></label>
+                </div>
+                <label>Polygon vertices, one latitude/longitude pair per line<textarea id="placePolygonVertices" rows="4" placeholder="51.5901, -3.3260">${polygonText}</textarea></label>
+                <div id="placeBoundaryPreview" class="boundary-preview">Adjust the boundary to preview which visits enter or leave.</div>
+                <label>Notes<textarea id="placeEditNotes" rows="3">${escapeHtml(profile.place.notes || '')}</textarea></label>
+                <label>Tags, comma separated<input id="placeEditTags" value="${escapeHtml(profile.place.tags.join(', '))}"></label>
+                <label><input id="placeEditIgnored" type="checkbox" ${profile.place.ignored ? 'checked' : ''} style="width:auto"> Ignore this place in analysis</label>
+                <div class="suggestion-actions"><button id="savePlaceCorrections">Save place changes</button></div>
+
+                <h4>Merge place</h4>
+                <div class="suggestion-actions"><select id="mergePlaceTarget"><option value="">Choose another place…</option>${placeOptions}</select><button id="mergePlaceButton">Preview and merge</button></div>
+
+                <h4>Split or reassign visits</h4>
+                <label>New split name<input id="splitPlaceName" placeholder="Name for the separated place"></label>
+                <div class="visit-correction-list">${placeVisits.map(visit => `<div class="visit-correction-row"><input type="checkbox" data-split-visit="${visit.id}"><span>${visit.interval.start ? formatTimestamp(visit.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${formatAnalyticsDuration(visit.interval.start && visit.interval.end ? Date.parse(visit.interval.end) - Date.parse(visit.interval.start) : null)}</span><select data-reassign-visit="${visit.id}"><option value="">Reassign to…</option>${placeOptions}</select></div>`).join('')}</div>
+                <div class="suggestion-actions"><button id="splitPlaceButton">Preview and split selected visits</button></div>
+            </section>`;
+
+        const proposedBoundary = () => {
+            const latitude = Number(document.getElementById('placeEditLatitude').value);
+            const longitude = Number(document.getElementById('placeEditLongitude').value);
+            if (document.getElementById('placeBoundaryType').value === 'polygon') {
+                const vertices = document.getElementById('placePolygonVertices').value.split('\n').flatMap(line => {
+                    const [lat, lng] = line.split(',').map(Number);
+                    return Number.isFinite(lat) && Number.isFinite(lng) ? [{ latitude: lat, longitude: lng }] : [];
+                });
+                return vertices.length >= 3 ? { kind: 'polygon', vertices } : null;
+            }
+            return Number.isFinite(latitude) && Number.isFinite(longitude) ? { kind: 'circle', centre: { latitude, longitude }, radiusMeters: Number(document.getElementById('placeEditRadius').value) } : null;
+        };
+        const updateBoundaryPreview = () => {
+            const boundary = proposedBoundary();
+            document.getElementById('placeRadiusValue').textContent = `${document.getElementById('placeEditRadius').value} m`;
+            if (!boundary) { document.getElementById('placeBoundaryPreview').textContent = 'A polygon needs at least three valid vertices.'; return; }
+            const preview = PlacesAnalytics.previewBoundaryChange(canonical.visits, profile.place.boundary, boundary);
+            document.getElementById('placeBoundaryPreview').textContent = `${preview.proposedInsideVisitIds.length} visits inside · ${preview.enteringVisitIds.length} entering · ${preview.leavingVisitIds.length} leaving`;
+        };
+        ['placeEditLatitude', 'placeEditLongitude', 'placeEditRadius', 'placeBoundaryType', 'placePolygonVertices'].forEach(id => document.getElementById(id).addEventListener('input', updateBoundaryPreview));
+        updateBoundaryPreview();
+        document.getElementById('savePlaceCorrections').addEventListener('click', async () => {
+            const boundary = proposedBoundary();
+            const coordinates = { latitude: Number(document.getElementById('placeEditLatitude').value), longitude: Number(document.getElementById('placeEditLongitude').value) };
+            if (!boundary || !Number.isFinite(coordinates.latitude) || !Number.isFinite(coordinates.longitude)) { alert('Please provide valid coordinates and boundary values.'); return; }
+            await appendPlaceCorrection({ type: 'rename-place', placeId: profile.place.id, name: document.getElementById('placeEditName').value.trim() || profile.place.name });
+            await appendPlaceCorrection({ type: 'categorise-place', placeId: profile.place.id, category: document.getElementById('placeEditCategory').value.trim() || null });
+            await appendPlaceCorrection({ type: 'move-place', placeId: profile.place.id, coordinates });
+            await appendPlaceCorrection({ type: 'change-boundary', placeId: profile.place.id, boundary });
+            await appendPlaceCorrection({ type: 'update-place-notes', placeId: profile.place.id, notes: document.getElementById('placeEditNotes').value, tags: document.getElementById('placeEditTags').value.split(',').map(value => value.trim()).filter(Boolean) });
+            await appendPlaceCorrection({ type: 'ignore-place', placeId: profile.place.id, ignored: document.getElementById('placeEditIgnored').checked });
+            await showIntelligenceView();
+        });
+        document.getElementById('mergePlaceButton').addEventListener('click', async () => {
+            const targetId = document.getElementById('mergePlaceTarget').value;
+            const target = canonical.places.find(place => place.id === targetId);
+            if (!target) return;
+            const targetVisits = canonical.visits.filter(visit => visit.placeId === targetId);
+            const combinedCoordinates = [...placeVisits, ...targetVisits].flatMap(visit => visit.coordinates ? [visit.coordinates] : []);
+            const spread = combinedCoordinates.length ? Math.max(...combinedCoordinates.map(point => Math.round(Math.hypot((point.latitude - centre.latitude) * 111320, (point.longitude - centre.longitude) * 70000)))) : 0;
+            if (!confirm(`Merge ${profile.place.name} with ${target.name}?\n\nCombined visits: ${placeVisits.length + targetVisits.length}\nEstimated coordinate spread: ${spread} m\n\nThis creates a reversible correction.`)) return;
+            await appendPlaceCorrection({ type: 'merge-places', sourcePlaceIds: [profile.place.id, targetId], targetPlaceId: targetId, name: target.name });
+            await showIntelligenceView();
+        });
+        document.getElementById('splitPlaceButton').addEventListener('click', async () => {
+            const visitIds = [...panel.querySelectorAll('[data-split-visit]:checked')].map(input => input.dataset.splitVisit);
+            const name = document.getElementById('splitPlaceName').value.trim();
+            if (!visitIds.length || !name) { alert('Select at least one visit and give the new place a name.'); return; }
+            if (!confirm(`Split ${visitIds.length} selected visit${visitIds.length === 1 ? '' : 's'} into “${name}”?\n\nThis creates a reversible correction.`)) return;
+            const newPlace = { ...profile.place, id: `user_split_${crypto.randomUUID()}`, name, sourceReferences: [...profile.place.sourceReferences], tags: [...profile.place.tags] };
+            await appendPlaceCorrection({ type: 'split-place', sourcePlaceId: profile.place.id, newPlace, visitIds });
+            await showIntelligenceView();
+        });
+        panel.querySelectorAll('[data-reassign-visit]').forEach(select => select.addEventListener('change', async event => {
+            if (!event.target.value) return;
+            if (!confirm('Reassign this visit to the selected place? This can be undone.')) { event.target.value = ''; return; }
+            await appendPlaceCorrection({ type: 'reassign-visit', visitId: event.target.dataset.reassignVisit, placeId: event.target.value });
+            await showIntelligenceView();
+        }));
     }
 
     function replayPointProjector(plan) {
