@@ -1120,12 +1120,16 @@ var PlacesAnalytics = (() => {
     placesPersistence: () => placesPersistence,
     pointInsideBoundary: () => pointInsideBoundary,
     previewBoundaryChange: () => previewBoundaryChange,
+    previewPlaceMerge: () => previewPlaceMerge,
     replayStateAt: () => replayStateAt,
     routinePercentile: () => routinePercentile,
     routineThreshold: () => routineThreshold,
     scoreJourney: () => scoreJourney,
     scoreVisit: () => scoreVisit,
     searchTimeline: () => searchTimeline,
+    suggestCoordinateSplit: () => suggestCoordinateSplit,
+    suggestDateRangeSplit: () => suggestDateRangeSplit,
+    suggestDurationSplit: () => suggestDurationSplit,
     summarizeDistribution: () => summarizeDistribution
   });
 
@@ -7129,6 +7133,53 @@ var PlacesAnalytics = (() => {
     const selectedDayContext = input.selectedDate ? buildSelectedDayContext(input.selectedDate, input.timeZone, input.timeline.places, input.timeline.visits, input.timeline.journeys) : null;
     report({ progress: 1, stage: "Analysis ready" });
     return { routine, anomalies, dataQuality, selectedDayContext };
+  }
+
+  // src/analytics/place-operations.ts
+  function previewPlaceMerge(placeIds, places, visits) {
+    const selectedPlaces = places.filter((place) => placeIds.includes(place.id));
+    const selectedVisits = visits.filter((visit) => placeIds.includes(visit.placeId));
+    const coordinates = selectedVisits.flatMap((visit) => visit.coordinates ? [visit.coordinates] : []);
+    const centre = coordinateCentroid(coordinates.length ? coordinates : selectedPlaces.flatMap((place) => place.coordinates ? [place.coordinates] : []));
+    const radius2 = estimatedRadiusMeters(coordinates);
+    return {
+      sourcePlaceIds: [...placeIds],
+      combinedVisitCount: selectedVisits.length,
+      combinedDurationMs: selectedVisits.reduce((sum, visit) => sum + (visit.interval.start && visit.interval.end ? Math.max(0, Date.parse(visit.interval.end) - Date.parse(visit.interval.start)) : 0), 0),
+      proposedCentre: centre,
+      proposedRadiusMeters: radius2,
+      conflictingNames: [...new Set(selectedPlaces.map((place) => place.name))],
+      conflictingCategories: [...new Set(selectedPlaces.flatMap((place) => place.category ? [place.category] : []))],
+      googlePlaceIds: [...new Set(selectedPlaces.flatMap((place) => place.googlePlaceId ? [place.googlePlaceId] : []))],
+      possibleOutlierVisitIds: centre && radius2 !== null ? selectedVisits.filter((visit) => visit.coordinates && haversineMeters(centre, visit.coordinates) > Math.max(75, radius2 * 0.8)).map((visit) => visit.id) : []
+    };
+  }
+  function coordinateGroups(visits, radiusMeters) {
+    const groups = [];
+    visits.filter((visit) => visit.coordinates).forEach((visit) => {
+      const group = groups.find((items) => items.some((item) => item.coordinates && haversineMeters(item.coordinates, visit.coordinates) <= radiusMeters));
+      if (group) group.push(visit);
+      else groups.push([visit]);
+    });
+    return groups.sort((a2, b2) => b2.length - a2.length);
+  }
+  function suggestCoordinateSplit(visits, radiusMeters = 50) {
+    const groups = coordinateGroups(visits, radiusMeters);
+    const secondary = groups[1];
+    if (!secondary || secondary.length < 1) return null;
+    return { method: "coordinates", visitIds: secondary.map((visit) => visit.id), explanation: `${secondary.length} visits form a separate coordinate cluster at least ${radiusMeters} m from the main cluster.` };
+  }
+  function suggestDateRangeSplit(visits, startDate, endDate) {
+    const selected = visits.filter((visit) => visit.interval.start && (!startDate || visit.interval.start.slice(0, 10) >= startDate) && (!endDate || visit.interval.start.slice(0, 10) <= endDate));
+    return selected.length ? { method: "date-range", visitIds: selected.map((visit) => visit.id), explanation: `${selected.length} visits fall within the requested date range.` } : null;
+  }
+  function suggestDurationSplit(visits, thresholdMinutes) {
+    const rows = visits.flatMap((visit) => visit.interval.start && visit.interval.end ? [{ visit, durationMs: Date.parse(visit.interval.end) - Date.parse(visit.interval.start) }] : []);
+    const summary = summarizeDistribution(rows.map((row) => row.durationMs));
+    const thresholdMs = thresholdMinutes === void 0 ? summary.p75 === null || summary.interquartileRange === null ? null : summary.p75 + 1.5 * summary.interquartileRange : thresholdMinutes * 6e4;
+    if (thresholdMs === null) return null;
+    const selected = rows.filter((row) => row.durationMs >= thresholdMs);
+    return selected.length ? { method: "duration", visitIds: selected.map((row) => row.visit.id), explanation: `${selected.length} visits last at least ${Math.round(thresholdMs / 6e4)} minutes.` } : null;
   }
   return __toCommonJS(browser_api_exports);
 })();

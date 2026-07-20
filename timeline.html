@@ -8105,6 +8105,13 @@ Departed: ${end}</description>
 
                 <h4>Split or reassign visits</h4>
                 <label>New split name<input id="splitPlaceName" placeholder="Name for the separated place"></label>
+                <div class="place-editor-grid">
+                    <label>Selection method<select id="splitSuggestionMethod"><option value="coordinates">Separate coordinate cluster</option><option value="date-range">Date range</option><option value="duration">Duration pattern</option></select></label>
+                    <label>Cluster radius (metres)<input id="splitClusterRadius" type="number" min="5" value="50"></label>
+                    <label>From date<input id="splitDateFrom" type="date"></label><label>To date<input id="splitDateTo" type="date"></label>
+                    <label>Minimum duration (minutes)<input id="splitDurationThreshold" type="number" min="0" placeholder="Automatic outlier threshold"></label>
+                </div>
+                <div class="suggestion-actions"><button id="suggestSplitVisits">Select visits from this evidence</button><span id="splitSuggestionStatus"></span></div>
                 <div class="visit-correction-list">${placeVisits.map(visit => {
                     const annotation = canonical.annotations.find(item => item.visitId === visit.id);
                     return `<div class="visit-correction-row"><input type="checkbox" data-split-visit="${visit.id}"><span>${visit.interval.start ? formatTimestamp(visit.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown time'} · ${formatAnalyticsDuration(visit.interval.start && visit.interval.end ? Date.parse(visit.interval.end) - Date.parse(visit.interval.start) : null)}${annotation?.purpose ? `<br><small>${escapeHtml(annotation.purpose)}${annotation.note ? ` · ${escapeHtml(annotation.note)}` : ''}</small>` : ''}</span><select data-reassign-visit="${visit.id}"><option value="">Reassign to…</option>${placeOptions}</select></div>`;
@@ -8178,12 +8185,21 @@ Departed: ${end}</description>
             const targetId = document.getElementById('mergePlaceTarget').value;
             const target = canonical.places.find(place => place.id === targetId);
             if (!target) return;
-            const targetVisits = canonical.visits.filter(visit => visit.placeId === targetId);
-            const combinedCoordinates = [...placeVisits, ...targetVisits].flatMap(visit => visit.coordinates ? [visit.coordinates] : []);
-            const spread = combinedCoordinates.length ? Math.max(...combinedCoordinates.map(point => Math.round(Math.hypot((point.latitude - centre.latitude) * 111320, (point.longitude - centre.longitude) * 70000)))) : 0;
-            if (!confirm(`Merge ${profile.place.name} with ${target.name}?\n\nCombined visits: ${placeVisits.length + targetVisits.length}\nEstimated coordinate spread: ${spread} m\n\nThis creates a reversible correction.`)) return;
+            const preview = PlacesAnalytics.previewPlaceMerge([profile.place.id, targetId], canonical.places, canonical.visits);
+            const centreText = preview.proposedCentre ? `${preview.proposedCentre.latitude.toFixed(6)}, ${preview.proposedCentre.longitude.toFixed(6)}` : 'unknown';
+            if (!confirm(`Merge ${profile.place.name} with ${target.name}?\n\nCombined visits: ${preview.combinedVisitCount}\nCombined time: ${formatAnalyticsDuration(preview.combinedDurationMs)}\nProposed centre: ${centreText}\nProposed radius: ${preview.proposedRadiusMeters === null ? 'unknown' : `${Math.round(preview.proposedRadiusMeters)} m`}\nNames: ${preview.conflictingNames.join(' / ')}\nCategories: ${preview.conflictingCategories.join(' / ') || 'none'}\nGoogle place IDs: ${preview.googlePlaceIds.join(' / ') || 'none'}\nVisits worth reviewing: ${preview.possibleOutlierVisitIds.length}\n\nThis creates a reversible correction.`)) return;
             await appendPlaceCorrection({ type: 'merge-places', sourcePlaceIds: [profile.place.id, targetId], targetPlaceId: targetId, name: target.name });
             await showIntelligenceView();
+        });
+        document.getElementById('suggestSplitVisits').addEventListener('click', () => {
+            const method = document.getElementById('splitSuggestionMethod').value;
+            const suggestion = method === 'coordinates'
+                ? PlacesAnalytics.suggestCoordinateSplit(placeVisits, Number(document.getElementById('splitClusterRadius').value || 50))
+                : method === 'date-range'
+                    ? PlacesAnalytics.suggestDateRangeSplit(placeVisits, document.getElementById('splitDateFrom').value || null, document.getElementById('splitDateTo').value || null)
+                    : PlacesAnalytics.suggestDurationSplit(placeVisits, document.getElementById('splitDurationThreshold').value === '' ? undefined : Number(document.getElementById('splitDurationThreshold').value));
+            panel.querySelectorAll('[data-split-visit]').forEach(input => { input.checked = Boolean(suggestion?.visitIds.includes(input.dataset.splitVisit)); });
+            document.getElementById('splitSuggestionStatus').textContent = suggestion?.explanation || 'No distinct group was found with those settings.';
         });
         document.getElementById('splitPlaceButton').addEventListener('click', async () => {
             const visitIds = [...panel.querySelectorAll('[data-split-visit]:checked')].map(input => input.dataset.splitVisit);

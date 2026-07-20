@@ -21,3 +21,4 @@ export { buildPeriodSummary } from "./analytics/period-summary.js";
 export { ANALYTICS_VERSION, buildAnalyticsCacheKey } from "./analytics/cache.js";
 export { calculateIntelligenceJob } from "./analytics/worker-jobs.js";
 export { buildSelectedDayContext, buildDayEventFeed } from "./analytics/selected-day-context.js";
+export { previewPlaceMerge, suggestCoordinateSplit, suggestDateRangeSplit, suggestDurationSplit } from "./analytics/place-operations.js";
