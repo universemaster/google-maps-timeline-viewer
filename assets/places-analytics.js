@@ -1087,11 +1087,16 @@ var PlacesAnalytics = (() => {
     buildPlaceProfile: () => buildPlaceProfile,
     buildPublicTransportAnalytics: () => buildPublicTransportAnalytics,
     buildReplayPlan: () => buildReplayPlan,
+    buildRoutineAnalysis: () => buildRoutineAnalysis,
     buildSelectedDaySummary: () => buildSelectedDaySummary,
     buildWalkingAnalytics: () => buildWalkingAnalytics,
     copyAnnotationToVisits: () => copyAnnotationToVisits,
     dayInterval: () => dayInterval,
+    detectAllAnomalies: () => detectAllAnomalies,
+    detectDayAnomalies: () => detectDayAnomalies,
+    detectJourneyAnomalies: () => detectJourneyAnomalies,
     detectTimelineFormat: () => detectTimelineFormat,
+    detectVisitAnomalies: () => detectVisitAnomalies,
     discoverPlaces: () => discoverPlaces,
     localParts: () => localParts,
     matchesAnnotationRule: () => matchesAnnotationRule,
@@ -1105,6 +1110,8 @@ var PlacesAnalytics = (() => {
     pointInsideBoundary: () => pointInsideBoundary,
     previewBoundaryChange: () => previewBoundaryChange,
     replayStateAt: () => replayStateAt,
+    routinePercentile: () => routinePercentile,
+    routineThreshold: () => routineThreshold,
     scoreJourney: () => scoreJourney,
     scoreVisit: () => scoreVisit,
     summarizeDistribution: () => summarizeDistribution
@@ -6418,6 +6425,244 @@ var PlacesAnalytics = (() => {
   }
   function copyAnnotationToVisits(annotation, visitIds) {
     return visitIds.map((visitId) => ({ ...annotation, id: entityId("annotation", visitId), visitId, foodAndDrink: [...annotation.foodAndDrink], people: [...annotation.people], tags: [...annotation.tags] }));
+  }
+
+  // src/analytics/routines.ts
+  function isHome3(place) {
+    return Boolean(place && (place.semanticType?.toUpperCase() === "HOME" || place.name.trim().toLowerCase() === "home"));
+  }
+  function minuteOfDay(timestamp, timeZone) {
+    const zoned = qi.Instant.from(timestamp).toZonedDateTimeISO(timeZone);
+    return zoned.hour * 60 + zoned.minute + zoned.second / 60;
+  }
+  function band(values) {
+    const finite = values.filter((value) => value !== null && Number.isFinite(value));
+    const summary = summarizeDistribution(finite);
+    return { count: finite.length, p10: summary.p10, p25: summary.p25, median: summary.median, p75: summary.p75, p90: summary.p90 };
+  }
+  function datesBetween(first, last) {
+    const result = [];
+    let date = qi.PlainDate.from(first);
+    const end = qi.PlainDate.from(last);
+    while (qi.PlainDate.compare(date, end) <= 0) {
+      result.push(date.toString());
+      date = date.add({ days: 1 });
+    }
+    return result;
+  }
+  function commonSequences(observations) {
+    const counts2 = /* @__PURE__ */ new Map();
+    observations.filter((row) => row.sequence.length > 0).forEach((row) => {
+      const key = row.sequence.join("");
+      const current = counts2.get(key);
+      counts2.set(key, current ? { ...current, count: current.count + 1 } : { placeIds: row.sequence, count: 1 });
+    });
+    return [...counts2.values()].sort((left, right) => right.count - left.count || left.placeIds.join().localeCompare(right.placeIds.join())).slice(0, 5);
+  }
+  function summarizeRows(rows) {
+    return {
+      observations: rows.length,
+      departureMinute: band(rows.map((row) => row.departureMinute)),
+      returnMinute: band(rows.map((row) => row.returnMinute)),
+      placesVisited: band(rows.map((row) => row.placesVisited)),
+      timeOutsideHomeMs: band(rows.map((row) => row.timeOutsideHomeMs)),
+      journeyDurationMs: band(rows.map((row) => row.journeyDurationMs)),
+      commonSequences: commonSequences(rows)
+    };
+  }
+  function buildRoutineAnalysis(timeZone, places, visits, journeys) {
+    const eventTimes = [...visits.flatMap((visit) => [visit.interval.start, visit.interval.end]), ...journeys.flatMap((journey) => [journey.interval.start, journey.interval.end])].filter((value) => Boolean(value));
+    if (eventTimes.length === 0) return { firstDate: null, lastDate: null, observations: [], weekdays: [], overall: summarizeRows([]) };
+    const dates = eventTimes.map((timestamp) => localParts(timestamp, timeZone).date).sort();
+    const placeById = new Map(places.map((place) => [place.id, place]));
+    const observations = datesBetween(dates[0], dates.at(-1)).map((date) => {
+      const dayVisits = visits.filter((visit) => visit.interval.start && localParts(visit.interval.start, timeZone).date === date).sort((left, right) => left.interval.start.localeCompare(right.interval.start));
+      const dayJourneys = journeys.filter((journey) => journey.interval.start && localParts(journey.interval.start, timeZone).date === date);
+      const firstOutside = dayVisits.find((visit) => !isHome3(placeById.get(visit.placeId)));
+      let lastOutsideIndex = -1;
+      for (let index = dayVisits.length - 1; index >= 0; index -= 1) {
+        if (!isHome3(placeById.get(dayVisits[index].placeId))) {
+          lastOutsideIndex = index;
+          break;
+        }
+      }
+      const returnHome = lastOutsideIndex < 0 ? void 0 : dayVisits.slice(lastOutsideIndex + 1).find((visit) => isHome3(placeById.get(visit.placeId)));
+      const sequence = dayVisits.map((visit) => visit.placeId).filter((placeId, index, all) => index === 0 || all[index - 1] !== placeId);
+      const summary = buildSelectedDaySummary(date, timeZone, places, visits, journeys);
+      return {
+        date,
+        dayOfWeek: qi.PlainDate.from(date).dayOfWeek,
+        departureMinute: firstOutside?.interval.start ? minuteOfDay(firstOutside.interval.start, timeZone) : null,
+        returnMinute: returnHome?.interval.start ? minuteOfDay(returnHome.interval.start, timeZone) : null,
+        placesVisited: new Set(dayVisits.map((visit) => visit.placeId)).size,
+        timeOutsideHomeMs: summary.timeOutsideHomeMs,
+        journeyDurationMs: dayJourneys.reduce((sum, journey) => sum + (journey.interval.start && journey.interval.end ? Math.max(0, Date.parse(journey.interval.end) - Date.parse(journey.interval.start)) : 0), 0),
+        sequence,
+        summary
+      };
+    });
+    return {
+      firstDate: dates[0],
+      lastDate: dates.at(-1),
+      observations,
+      weekdays: Array.from({ length: 7 }, (_2, index) => ({ dayOfWeek: index + 1, ...summarizeRows(observations.filter((row) => row.dayOfWeek === index + 1)) })),
+      overall: summarizeRows(observations)
+    };
+  }
+  function routinePercentile(values, value) {
+    if (values.length === 0) return 50;
+    const below = values.filter((candidate) => candidate < value).length;
+    const equal = values.filter((candidate) => candidate === value).length;
+    return (below + equal * 0.5) / values.length * 100;
+  }
+  function routineThreshold(values, probability) {
+    return percentile(values, probability);
+  }
+
+  // src/analytics/anomalies.ts
+  function median2(values) {
+    if (values.length === 0) return null;
+    const sorted = [...values].sort((a2, b2) => a2 - b2);
+    const centre = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[centre] : (sorted[centre - 1] + sorted[centre]) / 2;
+  }
+  function severity(rank) {
+    const tail = Math.min(rank, 100 - rank);
+    return tail <= 1 ? "extreme" : tail <= 5 ? "unusual" : "notable";
+  }
+  function finding(args) {
+    return { ...args, severity: severity(args.percentileRank) };
+  }
+  function comparableRows(target, routine) {
+    return routine.observations.filter((row) => row.date < target.date && row.dayOfWeek === target.dayOfWeek).slice(-52);
+  }
+  function detectDayAnomalies(date, routine) {
+    const target = routine.observations.find((row) => row.date === date);
+    if (!target) return [];
+    const history = comparableRows(target, routine);
+    if (history.length < 4) return [];
+    const metrics = [
+      { key: "departure", title: "Home departure time", value: target.departureMinute, values: history.flatMap((row) => row.departureMinute === null ? [] : [row.departureMinute]), unit: "minutes after midnight" },
+      { key: "return", title: "Return-home time", value: target.returnMinute, values: history.flatMap((row) => row.returnMinute === null ? [] : [row.returnMinute]), unit: "minutes after midnight" },
+      { key: "places", title: "Places visited", value: target.placesVisited, values: history.map((row) => row.placesVisited), unit: "places" },
+      { key: "outside", title: "Time outside home", value: target.timeOutsideHomeMs, values: history.map((row) => row.timeOutsideHomeMs), unit: "milliseconds" },
+      { key: "journeys", title: "Journey time", value: target.journeyDurationMs, values: history.map((row) => row.journeyDurationMs), unit: "milliseconds" },
+      { key: "gap", title: "Largest tracking gap", value: target.summary.largestTrackingGapMs, values: history.map((row) => row.summary.largestTrackingGapMs), unit: "milliseconds" }
+    ];
+    return metrics.flatMap((metric) => {
+      if (metric.value === null || metric.values.length < 4) return [];
+      const rank = routinePercentile(metric.values, metric.value);
+      if (rank > 10 && rank < 90) return [];
+      const baseline = median2(metric.values);
+      return [finding({
+        id: `day_${date}_${metric.key}`,
+        date,
+        type: `day-${metric.key}`,
+        title: metric.title,
+        explanation: `${metric.value.toLocaleString()} ${metric.unit}; historical median ${baseline?.toLocaleString() ?? "unavailable"}; ${rank.toFixed(1)}th percentile among ${metric.values.length} earlier matching weekdays.`,
+        value: metric.value,
+        historicalMedian: baseline,
+        percentileRank: rank,
+        confidence: Math.min(98, 55 + metric.values.length * 2),
+        comparableDates: history.slice(-5).map((row) => row.date),
+        entityId: null
+      })];
+    });
+  }
+  function detectVisitAnomalies(timeZone, visits, places) {
+    const placeById = new Map(places.map((place) => [place.id, place]));
+    const byPlace = /* @__PURE__ */ new Map();
+    visits.forEach((visit) => byPlace.set(visit.placeId, [...byPlace.get(visit.placeId) ?? [], visit]));
+    return [...byPlace.entries()].flatMap(([placeId, placeVisits]) => {
+      const sorted = placeVisits.filter((visit) => visit.interval.start).sort((a2, b2) => a2.interval.start.localeCompare(b2.interval.start));
+      const result = [];
+      sorted.forEach((visit, index) => {
+        const duration = durationMilliseconds(visit.interval.start, visit.interval.end);
+        const prior = sorted.slice(0, index);
+        const priorDurations = prior.flatMap((candidate) => {
+          const value = durationMilliseconds(candidate.interval.start, candidate.interval.end);
+          return value === null ? [] : [value];
+        });
+        if (duration !== null && priorDurations.length >= 5) {
+          const rank = routinePercentile(priorDurations, duration);
+          if (rank <= 5 || rank >= 95) result.push(finding({
+            id: `visit_${visit.id}_duration`,
+            date: localParts(visit.interval.start, timeZone).date,
+            type: "visit-duration",
+            title: `Unusual visit to ${placeById.get(placeId)?.name ?? "a place"}`,
+            explanation: `This visit lasted ${Math.round(duration / 6e4)} minutes, the ${rank.toFixed(1)}th percentile among ${priorDurations.length} earlier visits here.`,
+            value: duration,
+            historicalMedian: median2(priorDurations),
+            percentileRank: rank,
+            confidence: Math.min(97, 60 + priorDurations.length * 2),
+            comparableDates: prior.slice(-5).map((candidate) => localParts(candidate.interval.start, timeZone).date),
+            entityId: visit.id
+          }));
+        }
+        const previous = prior.at(-1);
+        if (previous?.interval.end && visit.interval.start) {
+          const gap = Date.parse(visit.interval.start) - Date.parse(previous.interval.end);
+          const historicalGaps = prior.slice(1).flatMap((candidate, priorIndex) => {
+            const end = prior[priorIndex]?.interval.end;
+            return end && candidate.interval.start ? [Date.parse(candidate.interval.start) - Date.parse(end)] : [];
+          });
+          if (historicalGaps.length >= 4) {
+            const rank = routinePercentile(historicalGaps, gap);
+            if (rank >= 95) result.push(finding({
+              id: `visit_${visit.id}_return`,
+              date: localParts(visit.interval.start, timeZone).date,
+              type: "return-after-gap",
+              title: `Return to ${placeById.get(placeId)?.name ?? "a place"} after a long interval`,
+              explanation: `${Math.round(gap / 864e5)} days since the prior visit, the ${rank.toFixed(1)}th percentile for this place.`,
+              value: gap,
+              historicalMedian: median2(historicalGaps),
+              percentileRank: rank,
+              confidence: Math.min(96, 58 + historicalGaps.length * 2),
+              comparableDates: prior.slice(-5).map((candidate) => localParts(candidate.interval.start, timeZone).date),
+              entityId: visit.id
+            }));
+          }
+        }
+      });
+      return result;
+    });
+  }
+  function detectJourneyAnomalies(timeZone, journeys) {
+    const byRouteMode = /* @__PURE__ */ new Map();
+    journeys.forEach((journey) => {
+      const key = `${journey.startPlaceId ?? "?"}|${journey.endPlaceId ?? "?"}|${journey.travelMode}`;
+      byRouteMode.set(key, [...byRouteMode.get(key) ?? [], journey]);
+    });
+    return [...byRouteMode.values()].flatMap((group) => group.sort((a2, b2) => (a2.interval.start ?? "").localeCompare(b2.interval.start ?? "")).flatMap((journey, index, sorted) => {
+      const duration = durationMilliseconds(journey.interval.start, journey.interval.end);
+      const priorDurations = sorted.slice(0, index).flatMap((candidate) => {
+        const value = durationMilliseconds(candidate.interval.start, candidate.interval.end);
+        return value === null ? [] : [value];
+      });
+      if (duration === null || !journey.interval.start || priorDurations.length < 5) return [];
+      const rank = routinePercentile(priorDurations, duration);
+      if (rank < 95) return [];
+      return [finding({
+        id: `journey_${journey.id}_duration`,
+        date: localParts(journey.interval.start, timeZone).date,
+        type: "journey-duration",
+        title: `Unusually long ${journey.travelMode.toLowerCase()} journey`,
+        explanation: `${Math.round(duration / 6e4)} minutes, the ${rank.toFixed(1)}th percentile among ${priorDurations.length} earlier comparable journeys.`,
+        value: duration,
+        historicalMedian: median2(priorDurations),
+        percentileRank: rank,
+        confidence: Math.min(97, 60 + priorDurations.length * 2),
+        comparableDates: sorted.slice(Math.max(0, index - 5), index).flatMap((candidate) => candidate.interval.start ? [localParts(candidate.interval.start, timeZone).date] : []),
+        entityId: journey.id
+      })];
+    }));
+  }
+  function detectAllAnomalies(timeZone, routine, places, visits, journeys) {
+    return [
+      ...routine.observations.flatMap((row) => detectDayAnomalies(row.date, routine)),
+      ...detectVisitAnomalies(timeZone, visits, places),
+      ...detectJourneyAnomalies(timeZone, journeys)
+    ].sort((left, right) => right.date.localeCompare(left.date) || right.confidence - left.confidence);
   }
   return __toCommonJS(browser_api_exports);
 })();

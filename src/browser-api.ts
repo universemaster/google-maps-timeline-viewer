@@ -13,3 +13,5 @@ export { placesPersistence } from "./persistence/database.js";
 export { pointInsideBoundary, previewBoundaryChange } from "./analytics/boundaries.js";
 export { buildJourneyAnalytics, buildWalkingAnalytics, buildPublicTransportAnalytics } from "./analytics/journeys.js";
 export { VISIT_PURPOSES, matchesAnnotationRule, applyAnnotationRules, mergeAnnotations, copyAnnotationToVisits } from "./analytics/annotations.js";
+export { buildRoutineAnalysis, routinePercentile, routineThreshold } from "./analytics/routines.js";
+export { detectDayAnomalies, detectVisitAnomalies, detectJourneyAnomalies, detectAllAnomalies } from "./analytics/anomalies.js";
