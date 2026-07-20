@@ -7,13 +7,15 @@
     "@js-temporal/polyfill": "^0.5.1"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:browser",
+    "build:browser": "esbuild src/browser-api.ts --bundle --format=iife --global-name=PlacesAnalytics --target=es2020 --outfile=assets/places-analytics.js",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "esbuild": "^0.25.5",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }
