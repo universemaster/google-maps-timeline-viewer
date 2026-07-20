@@ -1,8 +1,8 @@
 import type { CorrectionCommand } from "../model/corrections.js";
-import type { VisitAnnotation } from "../model/types.js";
+import type { AnnotationRule, VisitAnnotation } from "../model/types.js";
 
 const DATABASE_NAME = "PlacesTrackerAnalyticsDB";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 
 export type SuggestionDecision = "accepted" | "merged" | "ignored-once" | "ignored-permanently";
 
@@ -34,6 +34,7 @@ export function openPlacesDatabase(): Promise<IDBDatabase> {
       const database = request.result;
       if (!database.objectStoreNames.contains("corrections")) database.createObjectStore("corrections", { keyPath: "id" });
       if (!database.objectStoreNames.contains("annotations")) database.createObjectStore("annotations", { keyPath: "id" });
+      if (!database.objectStoreNames.contains("annotation-rules")) database.createObjectStore("annotation-rules", { keyPath: "id" });
       if (!database.objectStoreNames.contains("suggestion-decisions")) database.createObjectStore("suggestion-decisions", { keyPath: "suggestionId" });
       if (!database.objectStoreNames.contains("analytics-cache")) database.createObjectStore("analytics-cache", { keyPath: "key" });
       if (!database.objectStoreNames.contains("settings")) database.createObjectStore("settings", { keyPath: "key" });
@@ -62,6 +63,8 @@ export const placesPersistence = {
   getCorrections: () => getAll<CorrectionCommand>("corrections"),
   putAnnotation: (annotation: VisitAnnotation) => put("annotations", annotation),
   getAnnotations: () => getAll<VisitAnnotation>("annotations"),
+  putAnnotationRule: (rule: AnnotationRule) => put("annotation-rules", rule),
+  getAnnotationRules: () => getAll<AnnotationRule>("annotation-rules"),
   putSuggestionDecision: (decision: StoredSuggestionDecision) => put("suggestion-decisions", decision),
   getSuggestionDecisions: () => getAll<StoredSuggestionDecision>("suggestion-decisions"),
   putCache: <T>(record: AnalyticsCacheRecord<T>) => put("analytics-cache", record),

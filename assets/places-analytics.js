@@ -1078,6 +1078,8 @@ var PlacesAnalytics = (() => {
   var browser_api_exports = {};
   __export(browser_api_exports, {
     DEFAULT_PLACE_DISCOVERY_SETTINGS: () => DEFAULT_PLACE_DISCOVERY_SETTINGS,
+    VISIT_PURPOSES: () => VISIT_PURPOSES,
+    applyAnnotationRules: () => applyAnnotationRules,
     applyCorrections: () => applyCorrections,
     buildDataQualityDashboard: () => buildDataQualityDashboard,
     buildDataQualitySummary: () => buildDataQualitySummary,
@@ -1087,10 +1089,13 @@ var PlacesAnalytics = (() => {
     buildReplayPlan: () => buildReplayPlan,
     buildSelectedDaySummary: () => buildSelectedDaySummary,
     buildWalkingAnalytics: () => buildWalkingAnalytics,
+    copyAnnotationToVisits: () => copyAnnotationToVisits,
     dayInterval: () => dayInterval,
     detectTimelineFormat: () => detectTimelineFormat,
     discoverPlaces: () => discoverPlaces,
     localParts: () => localParts,
+    matchesAnnotationRule: () => matchesAnnotationRule,
+    mergeAnnotations: () => mergeAnnotations,
     movingAverage: () => movingAverage,
     nextPausePoint: () => nextPausePoint,
     normalizeTimeline: () => normalizeTimeline,
@@ -6182,7 +6187,7 @@ var PlacesAnalytics = (() => {
 
   // src/persistence/database.ts
   var DATABASE_NAME = "PlacesTrackerAnalyticsDB";
-  var DATABASE_VERSION = 1;
+  var DATABASE_VERSION = 2;
   function requestResult(request) {
     return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
@@ -6196,6 +6201,7 @@ var PlacesAnalytics = (() => {
         const database = request.result;
         if (!database.objectStoreNames.contains("corrections")) database.createObjectStore("corrections", { keyPath: "id" });
         if (!database.objectStoreNames.contains("annotations")) database.createObjectStore("annotations", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("annotation-rules")) database.createObjectStore("annotation-rules", { keyPath: "id" });
         if (!database.objectStoreNames.contains("suggestion-decisions")) database.createObjectStore("suggestion-decisions", { keyPath: "suggestionId" });
         if (!database.objectStoreNames.contains("analytics-cache")) database.createObjectStore("analytics-cache", { keyPath: "key" });
         if (!database.objectStoreNames.contains("settings")) database.createObjectStore("settings", { keyPath: "key" });
@@ -6226,6 +6232,8 @@ var PlacesAnalytics = (() => {
     getCorrections: () => getAll("corrections"),
     putAnnotation: (annotation) => put("annotations", annotation),
     getAnnotations: () => getAll("annotations"),
+    putAnnotationRule: (rule) => put("annotation-rules", rule),
+    getAnnotationRules: () => getAll("annotation-rules"),
     putSuggestionDecision: (decision) => put("suggestion-decisions", decision),
     getSuggestionDecisions: () => getAll("suggestion-decisions"),
     putCache: (record2) => put("analytics-cache", record2),
@@ -6363,6 +6371,53 @@ var PlacesAnalytics = (() => {
       confidence: Math.min(confidence, journey.startPlaceId && journey.endPlaceId ? 85 : 60),
       explanation: sameRouteCount ? `This origin, destination and mode recur in ${sameRouteCount} other journeys; no exact service is claimed.` : "The mode is recorded, but there is not enough evidence to identify an exact service."
     };
+  }
+
+  // src/analytics/annotations.ts
+  var VISIT_PURPOSES = ["Study", "Meal", "Coffee", "Shopping", "Exercise", "Walk", "Social", "Appointment", "Waiting", "Travel", "Errand", "Sightseeing", "Accommodation", "Other"];
+  function matchesAnnotationRule(visit, rule) {
+    if (!rule.enabled) return false;
+    if (rule.placeId && visit.placeId !== rule.placeId) return false;
+    const duration = durationMilliseconds(visit.interval.start, visit.interval.end);
+    if (rule.minimumDurationMs !== null && (duration === null || duration < rule.minimumDurationMs)) return false;
+    if (rule.maximumDurationMs !== null && (duration === null || duration > rule.maximumDurationMs)) return false;
+    return true;
+  }
+  function emptyAnnotation(visitId) {
+    return {
+      id: entityId("annotation", visitId),
+      visitId,
+      purpose: null,
+      activity: null,
+      satisfaction: null,
+      noise: null,
+      crowding: null,
+      airQuality: null,
+      spending: null,
+      foodAndDrink: [],
+      people: [],
+      note: "",
+      tags: [],
+      wouldReturn: null,
+      planned: null,
+      detectedPlaceCorrect: null
+    };
+  }
+  function applyAnnotationRules(visits, rules) {
+    return visits.flatMap((visit) => {
+      const matching = rules.filter((rule) => matchesAnnotationRule(visit, rule));
+      if (matching.length === 0) return [];
+      const annotation = matching.reduce((current, rule) => ({ ...current, ...rule.set, id: current.id, visitId: current.visitId }), emptyAnnotation(visit.id));
+      return [annotation];
+    });
+  }
+  function mergeAnnotations(generated, manual) {
+    const merged = new Map(generated.map((annotation) => [annotation.visitId, { ...annotation }]));
+    manual.forEach((annotation) => merged.set(annotation.visitId, { ...merged.get(annotation.visitId) ?? emptyAnnotation(annotation.visitId), ...annotation }));
+    return [...merged.values()];
+  }
+  function copyAnnotationToVisits(annotation, visitIds) {
+    return visitIds.map((visitId) => ({ ...annotation, id: entityId("annotation", visitId), visitId, foodAndDrink: [...annotation.foodAndDrink], people: [...annotation.people], tags: [...annotation.tags] }));
   }
   return __toCommonJS(browser_api_exports);
 })();

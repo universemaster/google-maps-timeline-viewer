@@ -108,6 +108,7 @@ export interface Journey {
 
 export interface VisitAnnotation {
   id: EntityId;
+  visitId: EntityId;
   purpose: string | null;
   activity: string | null;
   satisfaction: number | null;
@@ -122,6 +123,16 @@ export interface VisitAnnotation {
   wouldReturn: boolean | null;
   planned: boolean | null;
   detectedPlaceCorrect: boolean | null;
+}
+
+export interface AnnotationRule {
+  id: EntityId;
+  name: string;
+  enabled: boolean;
+  placeId: EntityId | null;
+  minimumDurationMs: number | null;
+  maximumDurationMs: number | null;
+  set: Partial<Omit<VisitAnnotation, "id" | "visitId">>;
 }
 
 export interface CanonicalTimeline {
