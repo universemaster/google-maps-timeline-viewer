@@ -31,6 +31,7 @@ export interface PlacesServerConfig {
   statePath: string;
   tokenPath: string;
   androidApkPath: string;
+  placeResolutionsPath: string;
   gitCommit: boolean;
   gitPush: boolean;
 }
@@ -44,9 +45,51 @@ export function defaultPlacesServerConfig(rootDir = process.cwd()): PlacesServer
     statePath: process.env.PLACES_STATE_PATH ?? join(rootDir, "data/places-server-state.json"),
     tokenPath: process.env.PLACES_TOKEN_PATH ?? join(rootDir, ".places-server-token"),
     androidApkPath: process.env.PLACES_ANDROID_APK ?? join(rootDir, "build/android/PlacesTrackerAndroid-debug.apk"),
+    placeResolutionsPath: process.env.PLACES_RESOLUTIONS_PATH ?? resolve(rootDir, "..", "everything-tracker", "data", "places", "place-resolutions.json"),
     gitCommit: process.env.PLACES_GIT_COMMIT !== "0",
     gitPush: process.env.PLACES_GIT_PUSH === "1",
   };
+}
+
+interface ExternalPlaceResolution {
+  placeId?: string;
+  label?: string;
+  category?: string;
+  confidence?: string;
+  confidenceScore?: number;
+  sources?: string[];
+  reason?: string;
+}
+
+export function applyExternalPlaceResolutions(timeline: CanonicalTimeline, resolutions: readonly ExternalPlaceResolution[]): number {
+  const byId = new Map(resolutions.filter(row => row.placeId && row.label).map(row => [row.placeId!, row]));
+  let applied = 0;
+  for (const place of timeline.places) {
+    const rawId = place.googlePlaceId ?? (place.id.startsWith("google_") ? place.id.slice("google_".length) : place.id);
+    const resolution = byId.get(rawId);
+    if (!resolution?.label) continue;
+    place.name = resolution.label;
+    if (resolution.category) place.category = resolution.category;
+    const evidenceNote = [
+      `Evidence resolution: ${resolution.confidence ?? "unknown"} confidence${Number.isFinite(resolution.confidenceScore) ? ` (${resolution.confidenceScore}/100)` : ""}.`,
+      resolution.reason,
+      resolution.sources?.length ? `Sources: ${resolution.sources.join(", ")}.` : "",
+    ].filter(Boolean).join(" ");
+    if (evidenceNote && !place.notes.includes(evidenceNote)) place.notes = [place.notes, evidenceNote].filter(Boolean).join("\n");
+    if (!place.tags.includes("evidence-resolved")) place.tags.push("evidence-resolved");
+    applied += 1;
+  }
+  return applied;
+}
+
+async function readExternalPlaceResolutions(filePath: string): Promise<ExternalPlaceResolution[]> {
+  try {
+    const parsed = JSON.parse(await readFile(filePath, "utf8")) as { resolutions?: ExternalPlaceResolution[] } | ExternalPlaceResolution[];
+    return Array.isArray(parsed) ? parsed : Array.isArray(parsed.resolutions) ? parsed.resolutions : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 export function emptyServerState(): ServerState {
@@ -148,7 +191,7 @@ export async function createPlacesServer(input: Partial<PlacesServerConfig> = {}
   const config = { ...defaultPlacesServerConfig(input.rootDir), ...input };
   const token = await ensureServerToken(config.tokenPath);
   const repository = new ServerStateRepository(config);
-  let timelineCache: { modifiedMs: number; timeline: CanonicalTimeline } | null = null;
+  let timelineCache: { modifiedMs: number; resolutionsModifiedMs: number; timeline: CanonicalTimeline; resolvedPlaces: number } | null = null;
 
   const authenticated = (request: IncomingMessage, url: URL): boolean => {
     const supplied = request.headers["x-places-token"] ?? url.searchParams.get("token") ?? "";
@@ -160,18 +203,23 @@ export async function createPlacesServer(input: Partial<PlacesServerConfig> = {}
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       if (url.pathname === "/api/health") {
         const sourceStat = await stat(config.timelinePath).catch(() => null);
-        json(response, 200, { ok: true, foregroundOnly: true, timelineAvailable: Boolean(sourceStat), timelineModifiedAt: sourceStat?.mtime.toISOString() ?? null });
+        const resolutionsStat = await stat(config.placeResolutionsPath).catch(() => null);
+        json(response, 200, { ok: true, foregroundOnly: true, timelineAvailable: Boolean(sourceStat), timelineModifiedAt: sourceStat?.mtime.toISOString() ?? null, placeResolutionsAvailable: Boolean(resolutionsStat), placeResolutionsModifiedAt: resolutionsStat?.mtime.toISOString() ?? null });
         return;
       }
       if (url.pathname.startsWith("/api/") && !authenticated(request, url)) { json(response, 401, { error: "Invalid or missing Places server token." }); return; }
 
       if (request.method === "GET" && url.pathname === "/api/bootstrap") {
         const sourceStat = await stat(config.timelinePath);
-        if (!timelineCache || timelineCache.modifiedMs !== sourceStat.mtimeMs) {
+        const resolutionsStat = await stat(config.placeResolutionsPath).catch(() => null);
+        const resolutionsModifiedMs = resolutionsStat?.mtimeMs ?? 0;
+        if (!timelineCache || timelineCache.modifiedMs !== sourceStat.mtimeMs || timelineCache.resolutionsModifiedMs !== resolutionsModifiedMs) {
           const raw = JSON.parse(await readFile(config.timelinePath, "utf8")) as unknown;
-          timelineCache = { modifiedMs: sourceStat.mtimeMs, timeline: normalizeTimeline(raw, { sourceName: config.timelinePath, importedAt: sourceStat.mtime.toISOString() }) };
+          const timeline = normalizeTimeline(raw, { sourceName: config.timelinePath, importedAt: sourceStat.mtime.toISOString() });
+          const resolvedPlaces = applyExternalPlaceResolutions(timeline, await readExternalPlaceResolutions(config.placeResolutionsPath));
+          timelineCache = { modifiedMs: sourceStat.mtimeMs, resolutionsModifiedMs, timeline, resolvedPlaces };
         }
-        const payload = Buffer.from(JSON.stringify({ timeline: timelineCache.timeline, state: await repository.read(), server: { foregroundOnly: true, gitCommit: config.gitCommit } }));
+        const payload = Buffer.from(JSON.stringify({ timeline: timelineCache.timeline, state: await repository.read(), server: { foregroundOnly: true, gitCommit: config.gitCommit, evidenceResolvedPlaces: timelineCache.resolvedPlaces } }));
         const compressed = await gzipAsync(payload);
         response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Encoding": "gzip", "Content-Length": compressed.length, "Cache-Control": "no-store" });
         response.end(compressed);

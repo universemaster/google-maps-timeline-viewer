@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPlacesServer, defaultPlacesServerConfig, ServerStateRepository } from "../src/server/places-server.js";
+import { applyExternalPlaceResolutions, createPlacesServer, defaultPlacesServerConfig, ServerStateRepository } from "../src/server/places-server.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -30,6 +30,17 @@ afterEach(async () => {
 });
 
 describe("Places Mac server", () => {
+  it("applies shared evidence resolutions to canonical places", () => {
+    const timeline = {
+      meta: { schemaVersion: 1, generatedAt: "", sources: [], dateRange: { start: null, end: null } },
+      places: [{ id: "google_cafe", name: "Unknown place", category: null, coordinates: null, boundary: null, googlePlaceId: "cafe", semanticType: null, ignored: false, notes: "", tags: [], sourceReferences: [] }],
+      visits: [], journeys: [], rawLocationPoints: [], annotations: [], categories: [], tags: [], qualityIssues: [], suggestedPlaces: [], importSessions: [],
+    };
+    expect(applyExternalPlaceResolutions(timeline, [{ placeId: "cafe", label: "Resolved Cafe", category: "Cafe", confidence: "high", confidenceScore: 95, sources: ["payment"], reason: "Coordinate and payment agree." }])).toBe(1);
+    expect(timeline.places[0]).toMatchObject({ name: "Resolved Cafe", category: "Cafe", tags: ["evidence-resolved"] });
+    expect(timeline.places[0]?.notes).toContain("95/100");
+  });
+
   it("serves health, protects personal data, and persists shared state", async () => {
     const rootDir = await temporaryDirectory();
     await mkdir(join(rootDir, "data"), { recursive: true });
@@ -41,7 +52,7 @@ describe("Places Mac server", () => {
     const port = await freePort();
     const { server, token } = await createPlacesServer({
       ...defaultPlacesServerConfig(rootDir), rootDir, host: "127.0.0.1", port, timelinePath,
-      statePath: join(rootDir, "data/state.json"), tokenPath: join(rootDir, ".token"), gitCommit: false, gitPush: false,
+      statePath: join(rootDir, "data/state.json"), tokenPath: join(rootDir, ".token"), placeResolutionsPath: join(rootDir, "missing-resolutions.json"), gitCommit: false, gitPush: false,
     });
     await new Promise<void>(resolve => server.listen(port, "127.0.0.1", resolve));
     try {
