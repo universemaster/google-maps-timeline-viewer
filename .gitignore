@@ -1,1 +1,14 @@
 proper_drive_downloads/*.zip
+
+# Local personal data and generated analytics. Small synthetic fixtures remain tracked.
+combined_google_location_history_*.zip
+combined_location_history_work/
+combined_location_history_dedupe_work/
+proper_local_inventory.json
+deduplicated_file_point_summary.csv
+places_dashboard_data.js
+
+# TypeScript build and test output
+node_modules/
+dist/
+coverage/
