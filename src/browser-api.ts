@@ -7,3 +7,4 @@ export { scoreVisit, scoreJourney } from "./analytics/confidence.js";
 export { summarizeDistribution, percentile, percentileRank, movingAverage } from "./analytics/statistics.js";
 export { dayInterval, localParts } from "./analytics/time.js";
 export { buildReplayPlan, replayStateAt, nextPausePoint } from "./analytics/replay.js";
+export { discoverPlaces, DEFAULT_PLACE_DISCOVERY_SETTINGS } from "./analytics/place-discovery.js";
