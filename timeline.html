@@ -2072,6 +2072,107 @@
     let editModeActiveFullItem = null;
     let homePlaceIds = [];
     let workPlaceIds = [];
+    const placesServerMode = new URLSearchParams(window.location.search).get('server') === '1';
+    const placesServerToken = new URLSearchParams(window.location.search).get('token') || '';
+
+    async function placesServerFetch(path, options = {}) {
+        const response = await fetch(path, {
+            ...options,
+            headers: { 'X-Places-Token': placesServerToken, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) }
+        });
+        if (!response.ok) throw new Error(`Mac server request failed (${response.status}).`);
+        return response.status === 204 ? null : response.json();
+    }
+
+    function canonicalTimelineObject(canonical) {
+        const places = new Map(canonical.places.map(place => [place.id, place]));
+        const coordinateObject = coordinates => coordinates ? {
+            latitudeE7: Math.round(coordinates.latitude * 1e7),
+            longitudeE7: Math.round(coordinates.longitude * 1e7),
+            lat: coordinates.latitude,
+            lng: coordinates.longitude
+        } : {};
+        const visits = canonical.visits.flatMap(visit => {
+            if (!visit.interval.start || !visit.interval.end) return [];
+            const place = places.get(visit.placeId);
+            const coordinates = visit.coordinates || place?.coordinates;
+            return [{ placeVisit: {
+                location: {
+                    ...coordinateObject(coordinates),
+                    placeId: place?.googlePlaceId || place?.id || visit.placeId,
+                    name: place?.name || 'Unknown place',
+                    semanticType: place?.semanticType || place?.category || undefined
+                },
+                duration: { startTimestamp: visit.interval.start, endTimestamp: visit.interval.end }
+            }}];
+        });
+        const journeys = canonical.journeys.flatMap(journey => {
+            if (!journey.interval.start || !journey.interval.end) return [];
+            const startCoordinates = journey.path[0]?.coordinates || places.get(journey.startPlaceId)?.coordinates;
+            const endCoordinates = journey.path.at(-1)?.coordinates || places.get(journey.endPlaceId)?.coordinates;
+            const points = journey.path.map(point => ({
+                latE7: Math.round(point.coordinates.latitude * 1e7),
+                lngE7: Math.round(point.coordinates.longitude * 1e7),
+                ...(point.at ? { timestamp: point.at } : {})
+            }));
+            return [{ activitySegment: {
+                activityType: journey.travelMode || 'UNKNOWN',
+                distance: journey.distanceMeters || 0,
+                duration: { startTimestamp: journey.interval.start, endTimestamp: journey.interval.end },
+                startLocation: coordinateObject(startCoordinates),
+                endLocation: coordinateObject(endCoordinates),
+                simplifiedRawPath: { distanceMeters: journey.distanceMeters || 0, points }
+            }}];
+        });
+        return [...visits, ...journeys].sort((left, right) => {
+            const leftTime = left.placeVisit?.duration?.startTimestamp || left.activitySegment?.duration?.startTimestamp || '';
+            const rightTime = right.placeVisit?.duration?.startTimestamp || right.activitySegment?.duration?.startTimestamp || '';
+            return leftTime.localeCompare(rightTime);
+        });
+    }
+
+    async function loadTimelineFromPlacesServer() {
+        const overlay = document.getElementById('loading-overlay');
+        overlay.style.display = 'flex';
+        document.getElementById('howToMessage').innerHTML = '<h3>Connecting to your Mac…</h3><p>Loading the shared Timeline and saved analysis state over Tailscale.</p>';
+        try {
+            const bootstrap = await placesServerFetch('/api/bootstrap');
+            timelineData = {};
+            activityTypes = new Set();
+            const objects = canonicalTimelineObject(bootstrap.timeline);
+            for (const item of objects) {
+                const timestamp = item.placeVisit?.duration?.startTimestamp || item.activitySegment?.duration?.startTimestamp;
+                if (!timestamp) continue;
+                const key = moment(timestamp).format('YYYY_MMMM').toUpperCase();
+                if (!timelineData[key]) timelineData[key] = { timelineObjects: [] };
+                timelineData[key].timelineObjects.push(item);
+                if (item.activitySegment?.activityType) activityTypes.add(item.activitySegment.activityType);
+            }
+            timelineEdits = bootstrap.state?.legacyEdits || { additions: [], modifications: [], deletions: [] };
+            savedEditsSnapshot = JSON.stringify(timelineEdits);
+            initialEditsCount = (timelineEdits.additions?.length || 0) + (timelineEdits.modifications?.length || 0) + (timelineEdits.deletions?.length || 0);
+            applyTimelineEdits();
+            globalMinDate = bootstrap.timeline.importSession.firstEventAt ? new Date(bootstrap.timeline.importSession.firstEventAt) : null;
+            globalMaxDate = bootstrap.timeline.importSession.lastEventAt ? new Date(bootstrap.timeline.importSession.lastEventAt) : null;
+            populateActivityFilters();
+            displayMinMaxDates();
+            setUIEnabled(true);
+            const latestDate = moment(globalMaxDate || new Date()).format('YYYY-MM-DD');
+            document.getElementById('startDatePicker').value = latestDate;
+            document.getElementById('endDatePicker').value = latestDate;
+            await loadTimelineDataInDateRange(new Date(`${latestDate}T00:00:00`), new Date(`${latestDate}T23:59:59`));
+            document.getElementById('folderPicker').style.display = 'none';
+            document.getElementById('reloadBtn').style.display = 'none';
+            document.getElementById('currentLocationBtn').style.display = 'none';
+            document.getElementById('howToMessage').innerHTML = '<h3>Connected to your Mac</h3><p>Your Timeline, analysis, annotations and corrections are shared through the foreground Places server. Saving a change writes it on the Mac and creates a Git commit.</p>';
+        } catch (error) {
+            console.error('Unable to load the Mac Places server:', error);
+            setUIEnabled(false);
+            document.getElementById('howToMessage').innerHTML = `<h3>Mac connection unavailable</h3><p>${escapeHtml(error.message)}</p><p>Start the Places server on your Mac, keep Tailscale connected, then reload.</p>`;
+        } finally {
+            overlay.style.display = 'none';
+        }
+    }
 
     // Summary View Globals
     let allYearlySummaries = null; // Calculated yearly summaries
@@ -6024,7 +6125,19 @@
         modal.style.display = 'block';
     }
 
-	function saveEditsToFile() {
+    async function saveEditsToFile() {
+        if (placesServerMode) {
+            try {
+                await placesServerFetch('/api/legacy-edits', { method: 'PUT', body: JSON.stringify(timelineEdits) });
+                initialEditsCount = (timelineEdits.additions?.length || 0) + (timelineEdits.modifications?.length || 0) + (timelineEdits.deletions?.length || 0);
+                savedEditsSnapshot = JSON.stringify(timelineEdits);
+                updateEditsIndicator();
+                document.getElementById('howToMessage').innerHTML = '<h3>Saved on your Mac</h3><p>The Timeline edit was written to the shared state file and committed to Git.</p>';
+            } catch (error) {
+                alert(`Could not save the edit on your Mac: ${error.message}`);
+            }
+            return;
+        }
         const jsonData = JSON.stringify(timelineEdits, null, 2);
         const blob = new Blob([jsonData], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -8959,8 +9072,9 @@ Departed: ${end}</description>
         });
     }
 
-    window.onload = function() {
-        initializeApp();
+    window.onload = async function() {
+        await initializeApp();
+        if (placesServerMode) await loadTimelineFromPlacesServer();
     };
 
 </script>

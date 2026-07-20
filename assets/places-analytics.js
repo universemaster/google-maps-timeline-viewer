@@ -1517,8 +1517,8 @@ var PlacesAnalytics = (() => {
     if (!Number.isInteger(windowSize) || windowSize < 1) throw new RangeError("Window size must be a positive integer.");
     return values.map((_2, index) => {
       if (index + 1 < windowSize) return null;
-      const window = values.slice(index + 1 - windowSize, index + 1);
-      return mean(window);
+      const window2 = values.slice(index + 1 - windowSize, index + 1);
+      return mean(window2);
     });
   }
 
@@ -6274,6 +6274,29 @@ var PlacesAnalytics = (() => {
   // src/persistence/database.ts
   var DATABASE_NAME = "PlacesTrackerAnalyticsDB";
   var DATABASE_VERSION = 2;
+  function remoteServerMode() {
+    return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("server") === "1";
+  }
+  function remoteServerToken() {
+    return typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("token") ?? "";
+  }
+  async function remoteRequest(storeName, method, key, value) {
+    const path = `/api/state/${encodeURIComponent(storeName)}${key ? `/${encodeURIComponent(key)}` : ""}`;
+    const response = await fetch(path, {
+      method,
+      headers: { "X-Places-Token": remoteServerToken(), ...value === void 0 ? {} : { "Content-Type": "application/json" } },
+      ...value === void 0 ? {} : { body: JSON.stringify(value) }
+    });
+    if (!response.ok) throw new Error(`Places server state request failed (${response.status}).`);
+    return response.status === 204 ? void 0 : await response.json();
+  }
+  function valueKey(storeName, value) {
+    const record2 = value;
+    const field = storeName === "suggestion-decisions" ? "suggestionId" : storeName === "analytics-cache" || storeName === "settings" ? "key" : "id";
+    const key = record2[field];
+    if (typeof key !== "string" || !key) throw new Error(`Missing ${field} for ${storeName}.`);
+    return key;
+  }
   function requestResult(request) {
     return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
@@ -6297,6 +6320,10 @@ var PlacesAnalytics = (() => {
     });
   }
   async function put(storeName, value) {
+    if (remoteServerMode()) {
+      await remoteRequest(storeName, "PUT", valueKey(storeName, value), value);
+      return;
+    }
     const database = await openPlacesDatabase();
     try {
       const transaction = database.transaction(storeName, "readwrite");
@@ -6306,6 +6333,7 @@ var PlacesAnalytics = (() => {
     }
   }
   async function getAll(storeName) {
+    if (remoteServerMode()) return remoteRequest(storeName, "GET");
     const database = await openPlacesDatabase();
     try {
       return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).getAll());
@@ -6314,6 +6342,10 @@ var PlacesAnalytics = (() => {
     }
   }
   async function get(storeName, key) {
+    if (remoteServerMode()) {
+      const records = await remoteRequest(storeName, "GET");
+      return records.find((record2) => valueKey(storeName, record2) === String(key));
+    }
     const database = await openPlacesDatabase();
     try {
       return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).get(key));
@@ -6322,6 +6354,10 @@ var PlacesAnalytics = (() => {
     }
   }
   async function remove(storeName, key) {
+    if (remoteServerMode()) {
+      await remoteRequest(storeName, "DELETE", String(key));
+      return;
+    }
     const database = await openPlacesDatabase();
     try {
       const transaction = database.transaction(storeName, "readwrite");

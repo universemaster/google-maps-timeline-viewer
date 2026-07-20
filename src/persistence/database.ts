@@ -4,6 +4,33 @@ import type { AnnotationRule, VisitAnnotation } from "../model/types.js";
 const DATABASE_NAME = "PlacesTrackerAnalyticsDB";
 const DATABASE_VERSION = 2;
 
+function remoteServerMode(): boolean {
+  return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("server") === "1";
+}
+
+function remoteServerToken(): string {
+  return typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("token") ?? "";
+}
+
+async function remoteRequest<T>(storeName: string, method: "GET" | "PUT" | "DELETE", key?: string, value?: unknown): Promise<T> {
+  const path = `/api/state/${encodeURIComponent(storeName)}${key ? `/${encodeURIComponent(key)}` : ""}`;
+  const response = await fetch(path, {
+    method,
+    headers: { "X-Places-Token": remoteServerToken(), ...(value === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(value === undefined ? {} : { body: JSON.stringify(value) }),
+  });
+  if (!response.ok) throw new Error(`Places server state request failed (${response.status}).`);
+  return response.status === 204 ? undefined as T : await response.json() as T;
+}
+
+function valueKey(storeName: string, value: unknown): string {
+  const record = value as Record<string, unknown>;
+  const field = storeName === "suggestion-decisions" ? "suggestionId" : storeName === "analytics-cache" || storeName === "settings" ? "key" : "id";
+  const key = record[field];
+  if (typeof key !== "string" || !key) throw new Error(`Missing ${field} for ${storeName}.`);
+  return key;
+}
+
 export type SuggestionDecision = "accepted" | "merged" | "ignored-once" | "ignored-permanently";
 
 export interface StoredSuggestionDecision {
@@ -45,6 +72,10 @@ export function openPlacesDatabase(): Promise<IDBDatabase> {
 }
 
 async function put<T>(storeName: string, value: T): Promise<void> {
+  if (remoteServerMode()) {
+    await remoteRequest(storeName, "PUT", valueKey(storeName, value), value);
+    return;
+  }
   const database = await openPlacesDatabase();
   try {
     const transaction = database.transaction(storeName, "readwrite");
@@ -53,18 +84,27 @@ async function put<T>(storeName: string, value: T): Promise<void> {
 }
 
 async function getAll<T>(storeName: string): Promise<T[]> {
+  if (remoteServerMode()) return remoteRequest<T[]>(storeName, "GET");
   const database = await openPlacesDatabase();
   try { return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).getAll()) as T[]; }
   finally { database.close(); }
 }
 
 async function get<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+  if (remoteServerMode()) {
+    const records = await remoteRequest<T[]>(storeName, "GET");
+    return records.find(record => valueKey(storeName, record) === String(key));
+  }
   const database = await openPlacesDatabase();
   try { return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).get(key)) as T | undefined; }
   finally { database.close(); }
 }
 
 async function remove(storeName: string, key: IDBValidKey): Promise<void> {
+  if (remoteServerMode()) {
+    await remoteRequest(storeName, "DELETE", String(key));
+    return;
+  }
   const database = await openPlacesDatabase();
   try {
     const transaction = database.transaction(storeName, "readwrite");
