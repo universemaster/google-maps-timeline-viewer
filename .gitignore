@@ -12,3 +12,5 @@ places_dashboard_data.js
 node_modules/
 dist/
 coverage/
+.playwright-cli/
+output/playwright/

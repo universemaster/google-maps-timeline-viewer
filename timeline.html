@@ -1444,6 +1444,28 @@
         #apiKeyModal a {
             color: #007bff;
         }
+        #intelligenceView { display:none; position:absolute; inset:0 0 0 351px; z-index:70; overflow:auto; background:#f4f7fb; padding:24px; box-sizing:border-box; }
+        .intelligence-shell { max-width:1500px; margin:0 auto; }
+        .intelligence-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:20px; }
+        .intelligence-header h2 { margin:0 0 5px; font-size:26px; }
+        .intelligence-header p { margin:0; color:#5f6b7a; }
+        .intelligence-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:16px 0 24px; }
+        .intelligence-card { background:white; border:1px solid #dfe6ef; border-radius:12px; padding:15px; box-shadow:0 3px 12px rgba(23,43,77,.05); }
+        .intelligence-card span { color:#667085; font-size:12px; display:block; margin-bottom:5px; }
+        .intelligence-card strong { font-size:21px; color:#172b4d; }
+        .intelligence-layout { display:grid; grid-template-columns:minmax(300px,.8fr) minmax(460px,1.7fr); gap:18px; }
+        .intelligence-panel { background:white; border:1px solid #dfe6ef; border-radius:14px; padding:18px; min-width:0; }
+        .intelligence-panel h3 { margin:0 0 12px; }
+        #intelligencePlaceList { max-height:65vh; overflow:auto; }
+        .place-analysis-row { width:100%; display:flex; justify-content:space-between; gap:12px; border:0; border-bottom:1px solid #edf0f5; background:white; padding:11px 4px; text-align:left; cursor:pointer; }
+        .place-analysis-row:hover, .place-analysis-row.active { background:#eef5ff; }
+        .place-analysis-row small { color:#667085; }
+        .distribution-bars { display:grid; grid-template-columns:repeat(24,1fr); gap:2px; height:90px; align-items:end; margin-top:12px; }
+        .distribution-bars i { display:block; min-height:2px; background:#5a95f5; border-radius:3px 3px 0 0; }
+        .profile-table { width:100%; border-collapse:collapse; margin-top:10px; }
+        .profile-table td { border-bottom:1px solid #edf0f5; padding:8px 4px; }
+        .profile-table td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+        @media (max-width: 900px) { .intelligence-layout { grid-template-columns:1fr; } #intelligenceView { inset:0 0 56px 0; padding:14px; } }
     </style>
 </head>
 <body>
@@ -1490,6 +1512,9 @@
                         </button>
                         <button id="summaryBtn" class="icon-btn" title="Show Summary" disabled>
                             <span role="img" aria-label="Summary">📊</span> Summary
+                        </button>
+                        <button id="intelligenceBtn" class="icon-btn" title="Places intelligence" disabled>
+                            <span role="img" aria-label="Intelligence">✨</span> Analyse
                         </button>
                         <button id="worldBtn" class="icon-btn" title="Show World Map" disabled>
                             <span role="img" aria-label="World">🌎</span> World
@@ -1722,6 +1747,20 @@
             </div>
         </div><br>
     </div>
+
+    <main id="intelligenceView">
+        <div class="intelligence-shell">
+            <div class="intelligence-header">
+                <div><h2>Places intelligence</h2><p id="intelligenceScope">Your selected day and long-term place patterns</p></div>
+                <button id="closeIntelligenceBtn" class="control-btn">Back to map</button>
+            </div>
+            <section id="dailyIntelligenceCards" class="intelligence-grid"></section>
+            <div class="intelligence-layout">
+                <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
+                <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
+            </div>
+        </div>
+    </main>
 
     <div id="map" class=""></div>
     
@@ -5141,6 +5180,7 @@
             document.getElementById('fitMapBtn'),
             document.getElementById('areaBtn'),
             document.getElementById('summaryBtn'),
+            document.getElementById('intelligenceBtn'),
             document.getElementById('worldBtn'),
             document.getElementById('mapBtn'),
             document.getElementById('kmlBtn'),
@@ -7690,6 +7730,7 @@ Departed: ${end}</description>
             initSettingsButton();
             initFitMapButton();
             initSummaryView();
+            initIntelligenceView();
             initWorldView();
             initCacheControls();
             initSearch();
@@ -7771,6 +7812,121 @@ Departed: ${end}</description>
             renderMapUnavailableState("The viewer hit an initialization error, but you can still try loading timeline data.");
             syncOptionalFeatureControls();
         }
+    }
+
+    function formatAnalyticsDuration(milliseconds) {
+        if (!Number.isFinite(milliseconds)) return '—';
+        const minutes = Math.round(milliseconds / 60000);
+        const hours = Math.floor(minutes / 60);
+        const remainder = minutes % 60;
+        return hours ? `${hours} h ${remainder ? `${remainder} min` : ''}`.trim() : `${remainder} min`;
+    }
+
+    function buildCanonicalAnalyticsTimeline() {
+        const timelineObjects = Object.values(timelineData).flatMap(month => month.timelineObjects || []);
+        const canonical = PlacesAnalytics.normalizeTimeline(
+            { timelineObjects },
+            { sourceName: 'Loaded Timeline data', importedAt: new Date().toISOString() }
+        );
+        canonical.places.forEach(place => {
+            const rawId = place.googlePlaceId;
+            if (rawId && homePlaceIds.includes(rawId)) {
+                place.semanticType = 'HOME';
+                place.name = 'Home';
+            }
+            const cached = rawId ? placeDetailsCache[rawId] : null;
+            if (cached?.displayName?.text) place.name = cached.displayName.text;
+            else if (cached?.name && typeof cached.name === 'string') place.name = cached.name;
+        });
+        canonical.visits = canonical.visits.map(visit => ({ ...visit, confidence: PlacesAnalytics.scoreVisit(visit) }));
+        canonical.journeys = canonical.journeys.map(journey => ({ ...journey, confidence: PlacesAnalytics.scoreJourney(journey) }));
+        return canonical;
+    }
+
+    function renderHourDistribution(values) {
+        const maximum = Math.max(1, ...values);
+        return `<div class="distribution-bars" aria-label="Arrivals by hour">${values.map((value, hour) =>
+            `<i title="${hour}:00 — ${value} visit${value === 1 ? '' : 's'}" style="height:${Math.max(2, value / maximum * 100)}%"></i>`
+        ).join('')}</div>`;
+    }
+
+    function renderPlaceProfile(profile, canonical) {
+        const panel = document.getElementById('placeProfilePanel');
+        const previous = profile.commonPreviousPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
+        const next = profile.commonNextPlaces.slice(0, 3).map(row => `${canonical.places.find(place => place.id === row.placeId)?.name || 'Unknown'} (${row.count})`).join(', ') || 'Not enough data';
+        panel.innerHTML = `
+            <h3>${escapeHtml(profile.place.name)}</h3>
+            <p>${profile.trend === 'insufficient-data' ? 'Not enough history for a direction yet.' : `Visits are ${profile.trend} across recent years.`}</p>
+            <div class="intelligence-grid">
+                <div class="intelligence-card"><span>Total visits</span><strong>${profile.visitCount.toLocaleString()}</strong></div>
+                <div class="intelligence-card"><span>Unique days</span><strong>${profile.uniqueVisitDays.toLocaleString()}</strong></div>
+                <div class="intelligence-card"><span>Total time</span><strong>${formatAnalyticsDuration(profile.totalDurationMs)}</strong></div>
+                <div class="intelligence-card"><span>Median visit</span><strong>${formatAnalyticsDuration(profile.duration.median)}</strong></div>
+            </div>
+            <h4>Arrival times</h4>${renderHourDistribution(profile.arrivalHours)}
+            <table class="profile-table">
+                <tr><td>First visit</td><td>${profile.firstVisitAt ? formatTimestamp(profile.firstVisitAt, 'D MMM YYYY') : '—'}</td></tr>
+                <tr><td>Most recent visit</td><td>${profile.mostRecentVisitAt ? formatTimestamp(profile.mostRecentVisitAt, 'D MMM YYYY') : '—'}</td></tr>
+                <tr><td>Mean visit</td><td>${formatAnalyticsDuration(profile.duration.mean)}</td></tr>
+                <tr><td>Shortest / longest</td><td>${formatAnalyticsDuration(profile.duration.minimum)} / ${formatAnalyticsDuration(profile.duration.maximum)}</td></tr>
+                <tr><td>Middle 50%</td><td>${formatAnalyticsDuration(profile.duration.p25)} – ${formatAnalyticsDuration(profile.duration.p75)}</td></tr>
+                <tr><td>Typical previous places</td><td>${escapeHtml(previous)}</td></tr>
+                <tr><td>Typical next places</td><td>${escapeHtml(next)}</td></tr>
+                <tr><td>Estimated coordinate spread</td><td>${profile.coordinateSpreadMeters === null ? '—' : `${Math.round(profile.coordinateSpreadMeters)} m`}</td></tr>
+                <tr><td>Low-confidence / uncertain visits</td><td>${profile.lowConfidenceVisits} / ${profile.uncertainTimes}</td></tr>
+            </table>`;
+    }
+
+    function showIntelligenceView() {
+        if (!uiEnabled) return;
+        const canonical = buildCanonicalAnalyticsTimeline();
+        const timeZone = getSelectedTimezone();
+        const selectedDate = document.getElementById('startDatePicker').value;
+        const daily = PlacesAnalytics.buildSelectedDaySummary(selectedDate, timeZone, canonical.places, canonical.visits, canonical.journeys);
+        const quality = PlacesAnalytics.buildDataQualitySummary(canonical.places, canonical.visits, canonical.journeys);
+        document.getElementById('intelligenceScope').textContent = `${moment(selectedDate).format('dddd D MMMM YYYY')} · ${Math.round(daily.trackingCoveragePercent)}% tracking coverage`;
+        const cards = [
+            ['At home', formatAnalyticsDuration(daily.timeAtHomeMs)], ['Outside home', formatAnalyticsDuration(daily.timeOutsideHomeMs)],
+            ['Distance', formatDistance(daily.totalDistanceMeters)], ['Places', daily.placesVisited.toLocaleString()],
+            ['Journeys', daily.journeys.toLocaleString()], ['Walking', formatAnalyticsDuration(daily.walkingDurationMs)],
+            ['Largest gap', formatAnalyticsDuration(daily.largestTrackingGapMs)], ['Data confidence', quality.visitConfidence.median === null ? '—' : `${Math.round(quality.visitConfidence.median)}/100`],
+        ];
+        document.getElementById('dailyIntelligenceCards').innerHTML = cards.map(([label, value]) => `<div class="intelligence-card"><span>${label}</span><strong>${value}</strong></div>`).join('');
+        const profiles = canonical.places.map(place => PlacesAnalytics.buildPlaceProfile(place, canonical.visits, canonical.journeys, timeZone, Date.now())).filter(profile => profile.visitCount > 0);
+        profiles.sort((a, b) => {
+            const score = profile => Math.log1p(profile.visitCount) * 10 + Math.log1p(profile.totalDurationMs / 3600000) * 5 + (profile.trend === 'increasing' ? 8 : 0) + (profile.lowConfidenceVisits ? 4 : 0);
+            return score(b) - score(a) || b.totalDurationMs - a.totalDurationMs;
+        });
+        const list = document.getElementById('intelligencePlaceList');
+        list.innerHTML = profiles.map((profile, index) => `<button class="place-analysis-row" data-profile-index="${index}"><span><strong>${escapeHtml(profile.place.name)}</strong><br><small>${profile.visitCount} visit${profile.visitCount === 1 ? '' : 's'} across ${profile.uniqueVisitDays} day${profile.uniqueVisitDays === 1 ? '' : 's'}</small></span><small>${formatAnalyticsDuration(profile.totalDurationMs)}</small></button>`).join('');
+        list.querySelectorAll('.place-analysis-row').forEach(button => button.addEventListener('click', () => {
+            list.querySelectorAll('.place-analysis-row').forEach(row => row.classList.remove('active'));
+            button.classList.add('active');
+            renderPlaceProfile(profiles[Number(button.dataset.profileIndex)], canonical);
+        }));
+        if (profiles.length) list.querySelector('.place-analysis-row')?.click();
+        document.getElementById('summaryView').style.display = 'none';
+        document.getElementById('map').classList.add('hidden');
+        document.getElementById('intelligenceView').style.display = 'block';
+        summaryViewVisible = false;
+        if (window.innerWidth <= 768) {
+            document.getElementById('sidebar').classList.add('mobile-hidden');
+            document.getElementById('show-map-btn')?.classList.add('active');
+            document.getElementById('show-sidebar-btn')?.classList.remove('active');
+        }
+    }
+
+    function initIntelligenceView() {
+        document.getElementById('intelligenceBtn').addEventListener('click', showIntelligenceView);
+        document.getElementById('closeIntelligenceBtn').addEventListener('click', () => {
+            document.getElementById('intelligenceView').style.display = 'none';
+            document.getElementById('map').classList.remove('hidden');
+            if (window.innerWidth <= 768) {
+                document.getElementById('sidebar').classList.remove('mobile-hidden');
+                document.getElementById('show-sidebar-btn')?.classList.add('active');
+                document.getElementById('show-map-btn')?.classList.remove('active');
+            }
+        });
     }
 
     window.onload = function() {
