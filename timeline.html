@@ -1877,6 +1877,7 @@
                 <div id="periodSummaryCards" class="intelligence-grid"></div>
                 <div class="quality-columns"><div><h4>Time by place category</h4><div id="periodCategories"></div></div><div><h4>Movement by mode</h4><div id="periodMovement"></div></div></div>
                 <h4>Places with the most time</h4><div id="periodPlaces"></div>
+                <h4>Places changing most</h4><div id="periodPlaceChanges"></div>
             </section>
             <section class="intelligence-panel" style="margin-bottom:18px">
                 <div class="intelligence-header"><div><h3>Compare places and journeys</h3><p>Select two or more rows. The first selected item is the baseline for raw and percentage differences.</p></div></div>
@@ -8557,16 +8558,21 @@ Departed: ${end}</description>
         const endDate = document.getElementById('endDatePicker').value;
         const summary = PlacesAnalytics.buildPeriodSummary(startDate, endDate, timeZone, canonical.places, canonical.visits, canonical.journeys);
         const placeById = new Map(canonical.places.map(place => [place.id, place]));
+        const longestJourney = canonical.journeys.find(journey => journey.id === summary.longestJourneyId);
         const cards = [
             ['At home', formatAnalyticsDuration(summary.timeAtHomeMs)], ['Outside home', formatAnalyticsDuration(summary.timeOutsideHomeMs)],
             ['Places', summary.placeMetrics.length.toLocaleString()], ['New places', summary.newPlaceIds.length.toLocaleString()],
             ['Median journey', formatAnalyticsDuration(summary.journeyDuration.median)], ['Most common route', summary.mostFrequentOriginDestination ? `${summary.mostFrequentOriginDestination.count}×` : '—'],
+            ['No longer visited', summary.noLongerVisitedPlaceIds.length.toLocaleString()], ['Route novelty', summary.routeNoveltyPercent === null ? '—' : `${summary.routeNoveltyPercent.toFixed(0)}%`],
+            ['Most distant place', summary.mostDistantPlaceId ? placeById.get(summary.mostDistantPlaceId)?.name || 'Unknown' : '—'], ['Longest journey', longestJourney ? formatAnalyticsDuration(Date.parse(longestJourney.interval.end) - Date.parse(longestJourney.interval.start)) : '—'],
+            ['Median distance', summary.journeyDistance.median === null ? '—' : formatDistance(summary.journeyDistance.median)], ['90th percentile distance', summary.journeyDistance.p90 === null ? '—' : formatDistance(summary.journeyDistance.p90)],
         ];
         document.getElementById('periodSummaryCards').innerHTML = cards.map(([label, value]) => `<div class="intelligence-card"><span>${label}</span><strong>${value}</strong></div>`).join('');
         const bars = (record, formatter) => Object.entries(record).sort((a, b) => b[1] - a[1]).map(([label, value]) => `<p><strong>${escapeHtml(formatActivityType(label))}</strong><br><small>${formatter(value)}</small></p>`).join('') || '<p>No data in this period.</p>';
         document.getElementById('periodCategories').innerHTML = bars(summary.timeByCategoryMs, formatAnalyticsDuration);
-        document.getElementById('periodMovement').innerHTML = bars(summary.timeByTravelModeMs, value => formatAnalyticsDuration(value));
+        document.getElementById('periodMovement').innerHTML = Object.keys(summary.timeByTravelModeMs).sort((a, b) => summary.timeByTravelModeMs[b] - summary.timeByTravelModeMs[a]).map(mode => `<p><strong>${escapeHtml(formatActivityType(mode))}</strong><br><small>${formatAnalyticsDuration(summary.timeByTravelModeMs[mode])} · ${formatDistance(summary.distanceByTravelModeMeters[mode] || 0)} · ${summary.journeysByTravelMode[mode] || 0} journeys</small></p>`).join('') || '<p>No movement in this period.</p>';
         document.getElementById('periodPlaces').innerHTML = `<table class="profile-table"><thead><tr><th>Place</th><th>Visits</th><th>Total time</th><th>Median visit</th></tr></thead><tbody>${summary.placeMetrics.slice(0, 20).map(row => `<tr><td>${escapeHtml(placeById.get(row.placeId)?.name || 'Unknown')}</td><td>${row.visits}</td><td>${formatAnalyticsDuration(row.totalDurationMs)}</td><td>${formatAnalyticsDuration(row.medianDurationMs)}</td></tr>`).join('')}</tbody></table>`;
+        document.getElementById('periodPlaceChanges').innerHTML = `<table class="profile-table"><thead><tr><th>Place</th><th>This period</th><th>Previous equivalent period</th><th>Change</th></tr></thead><tbody>${summary.placeChanges.slice(0, 20).map(row => `<tr><td>${escapeHtml(placeById.get(row.placeId)?.name || 'Unknown')}</td><td>${row.currentVisits}</td><td>${row.previousVisits}</td><td>${row.percentageChange === null ? (row.currentVisits ? 'New' : '—') : `${row.percentageChange >= 0 ? '+' : ''}${row.percentageChange.toFixed(1)}%`}</td></tr>`).join('')}</tbody></table>`;
     }
 
     function renderComparisons(canonical, timeZone) {

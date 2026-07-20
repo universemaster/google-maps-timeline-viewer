@@ -35,5 +35,7 @@ describe("comparisons, compound search and period summaries", () => {
     expect(summary.timeByCategoryMs.Cafe).toBe(2 * 3_600_000);
     expect(summary.journeysByTravelMode.WALKING).toBe(2);
     expect(summary.placeMetrics[0]!.placeId).toBe("home");
+    expect(summary.journeyDistance.median).toBe(3500);
+    expect(summary.longestJourneyId).toBe("j2");
   });
 });

@@ -6941,6 +6941,7 @@ var PlacesAnalytics = (() => {
   }
   function buildPeriodSummary(startDate, endDate, timeZone, places, visits, journeys) {
     const range = { startMs: dayInterval(startDate, timeZone).startMs, endMs: dayInterval(endDate, timeZone).endMs };
+    const previousRange = { startMs: range.startMs - (range.endMs - range.startMs), endMs: range.startMs };
     const placeById = new Map(places.map((place) => [place.id, place]));
     const timeByCategoryMs = {};
     const timeByTravelModeMs = {};
@@ -6961,6 +6962,8 @@ var PlacesAnalytics = (() => {
       placeRows.set(visit.placeId, [...placeRows.get(visit.placeId) ?? [], duration]);
     });
     const journeyDurations = [];
+    const journeyDistances = [];
+    const selectedJourneys = [];
     const routeCounts = /* @__PURE__ */ new Map();
     journeys.forEach((journey) => {
       const journeyInterval = interval2(journey.interval.start, journey.interval.end);
@@ -6969,6 +6972,8 @@ var PlacesAnalytics = (() => {
       if (duration <= 0) return;
       timeOutsideHomeMs += duration;
       journeyDurations.push(duration);
+      selectedJourneys.push(journey);
+      if (journey.distanceMeters !== null) journeyDistances.push(journey.distanceMeters);
       add(timeByTravelModeMs, journey.travelMode, duration);
       add(journeysByTravelMode, journey.travelMode, 1);
       if (journey.distanceMeters !== null) add(distanceByTravelModeMeters, journey.travelMode, journey.distanceMeters * duration / Math.max(1, journeyInterval.endMs - journeyInterval.startMs));
@@ -6980,6 +6985,22 @@ var PlacesAnalytics = (() => {
       if (visit.interval.start) firstByPlace.set(visit.placeId, Math.min(firstByPlace.get(visit.placeId) ?? Infinity, Date.parse(visit.interval.start)));
     });
     const route = [...routeCounts.entries()].sort((a2, b2) => b2[1] - a2[1])[0];
+    const previousPlaceCounts = /* @__PURE__ */ new Map();
+    visits.forEach((visit) => {
+      const visitInterval = interval2(visit.interval.start, visit.interval.end);
+      if (visitInterval && overlappingMilliseconds(visitInterval, previousRange) > 0) previousPlaceCounts.set(visit.placeId, (previousPlaceCounts.get(visit.placeId) ?? 0) + 1);
+    });
+    const placeChanges = [.../* @__PURE__ */ new Set([...placeRows.keys(), ...previousPlaceCounts.keys()])].map((placeId) => {
+      const currentVisits = placeRows.get(placeId)?.length ?? 0;
+      const previousVisits = previousPlaceCounts.get(placeId) ?? 0;
+      return { placeId, currentVisits, previousVisits, percentageChange: previousVisits === 0 ? null : (currentVisits - previousVisits) / previousVisits * 100 };
+    }).sort((a2, b2) => Math.abs(b2.percentageChange ?? (b2.currentVisits ? 100 : -100)) - Math.abs(a2.percentageChange ?? (a2.currentVisits ? 100 : -100)));
+    const home = places.find((place) => isHome4(place) && place.coordinates);
+    const mostDistant = home?.coordinates ? places.filter((place) => place.coordinates && placeRows.has(place.id)).map((place) => ({ id: place.id, distance: haversineMeters(home.coordinates, place.coordinates) })).sort((a2, b2) => b2.distance - a2.distance)[0] : void 0;
+    const longestJourney = selectedJourneys.filter((journey) => journey.interval.start && journey.interval.end).sort((a2, b2) => Date.parse(b2.interval.end) - Date.parse(b2.interval.start) - (Date.parse(a2.interval.end) - Date.parse(a2.interval.start)))[0];
+    const previouslySeenCells = new Set(journeys.filter((journey) => journey.interval.start && Date.parse(journey.interval.start) < range.startMs).flatMap((journey) => journey.path.map((point) => `${Math.round(point.coordinates.latitude * 1e3)}:${Math.round(point.coordinates.longitude * 1e3)}`)));
+    const currentCells = new Set(selectedJourneys.flatMap((journey) => journey.path.map((point) => `${Math.round(point.coordinates.latitude * 1e3)}:${Math.round(point.coordinates.longitude * 1e3)}`)));
+    const novelCells = [...currentCells].filter((cell) => !previouslySeenCells.has(cell)).length;
     return {
       startDate,
       endDate,
@@ -6991,11 +7012,17 @@ var PlacesAnalytics = (() => {
       distanceByTravelModeMeters,
       journeysByTravelMode,
       journeyDuration: summarizeDistribution(journeyDurations),
+      journeyDistance: summarizeDistribution(journeyDistances),
       placeMetrics: [...placeRows.entries()].map(([placeId, durations]) => ({ placeId, visits: durations.length, totalDurationMs: durations.reduce((sum, value) => sum + value, 0), medianDurationMs: summarizeDistribution(durations).median })).sort((a2, b2) => b2.totalDurationMs - a2.totalDurationMs),
       newPlaceIds: [...placeRows.keys()].filter((placeId) => {
         const first = firstByPlace.get(placeId);
         return first !== void 0 && first >= range.startMs && first < range.endMs;
       }),
+      noLongerVisitedPlaceIds: [...previousPlaceCounts.keys()].filter((placeId) => !placeRows.has(placeId)),
+      placeChanges,
+      mostDistantPlaceId: mostDistant?.id ?? null,
+      longestJourneyId: longestJourney?.id ?? null,
+      routeNoveltyPercent: currentCells.size ? novelCells / currentCells.size * 100 : null,
       mostFrequentOriginDestination: route ? { key: route[0], count: route[1] } : null
     };
   }
