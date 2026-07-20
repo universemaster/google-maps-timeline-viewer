@@ -1334,6 +1334,19 @@ var PlacesAnalytics = (() => {
     const timestamps = [...visits, ...journeys].flatMap((event) => [event.interval.start, event.interval.end]).filter((value) => value !== null).sort();
     return [timestamps[0] ?? null, timestamps.at(-1) ?? null];
   }
+  function linkJourneyPlaces(visits, journeys) {
+    const orderedVisits = visits.filter((visit) => visit.interval.start || visit.interval.end).sort((left, right) => (left.interval.start ?? left.interval.end ?? "").localeCompare(right.interval.start ?? right.interval.end ?? ""));
+    journeys.forEach((journey) => {
+      if (!journey.startPlaceId && journey.interval.start) {
+        const previous = orderedVisits.filter((visit) => visit.interval.end && visit.interval.end <= journey.interval.start).at(-1);
+        if (previous) journey.startPlaceId = previous.placeId;
+      }
+      if (!journey.endPlaceId && journey.interval.end) {
+        const next = orderedVisits.find((visit) => visit.interval.start && visit.interval.start >= journey.interval.end);
+        if (next) journey.endPlaceId = next.placeId;
+      }
+    });
+  }
   function normalizeTimeline(input, options = {}) {
     const sourceName = options.sourceName ?? "Timeline.json";
     const format = options.format ?? detectTimelineFormat(input, sourceName);
@@ -1360,6 +1373,7 @@ var PlacesAnalytics = (() => {
       normalizeTimelineObjects(objects, session, places, visits, journeys, warnings);
     }
     const [firstEventAt, lastEventAt] = eventBounds(visits, journeys);
+    linkJourneyPlaces(visits, journeys);
     session.firstEventAt = firstEventAt;
     session.lastEventAt = lastEventAt;
     session.recordCount = visits.length + journeys.length;

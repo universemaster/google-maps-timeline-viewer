@@ -250,6 +250,20 @@ function eventBounds(visits: Visit[], journeys: Journey[]): [string | null, stri
   return [timestamps[0] ?? null, timestamps.at(-1) ?? null];
 }
 
+function linkJourneyPlaces(visits: Visit[], journeys: Journey[]): void {
+  const orderedVisits = visits.filter(visit => visit.interval.start || visit.interval.end).sort((left, right) => (left.interval.start ?? left.interval.end ?? "").localeCompare(right.interval.start ?? right.interval.end ?? ""));
+  journeys.forEach(journey => {
+    if (!journey.startPlaceId && journey.interval.start) {
+      const previous = orderedVisits.filter(visit => visit.interval.end && visit.interval.end <= journey.interval.start!).at(-1);
+      if (previous) journey.startPlaceId = previous.placeId;
+    }
+    if (!journey.endPlaceId && journey.interval.end) {
+      const next = orderedVisits.find(visit => visit.interval.start && visit.interval.start >= journey.interval.end!);
+      if (next) journey.endPlaceId = next.placeId;
+    }
+  });
+}
+
 export interface NormalizeTimelineOptions {
   sourceName?: string;
   importedAt?: string;
@@ -283,6 +297,7 @@ export function normalizeTimeline(input: unknown, options: NormalizeTimelineOpti
     normalizeTimelineObjects(objects, session, places, visits, journeys, warnings);
   }
   const [firstEventAt, lastEventAt] = eventBounds(visits, journeys);
+  linkJourneyPlaces(visits, journeys);
   session.firstEventAt = firstEventAt;
   session.lastEventAt = lastEventAt;
   session.recordCount = visits.length + journeys.length;

@@ -1849,6 +1849,13 @@
                 <div class="replay-toolbar"><button id="refreshSuggestions" class="primary">Refresh suggestions</button><span id="suggestionStatus"></span></div>
                 <div id="suggestionGrid" class="suggestion-grid"></div>
             </section>
+            <section class="intelligence-panel" style="margin-bottom:18px">
+                <div class="intelligence-header"><div><h3>Journey analytics</h3><p>Distance, speed, pauses, route directness and mode-specific evidence.</p></div></div>
+                <div class="intelligence-layout">
+                    <div id="journeyAnalyticsList" class="visit-correction-list"></div>
+                    <div id="journeyAnalyticsDetail"><p>Select a journey to inspect it.</p></div>
+                </div>
+            </section>
             <div class="intelligence-layout">
                 <section class="intelligence-panel"><h3>Places</h3><div id="intelligencePlaceList"></div></section>
                 <section class="intelligence-panel" id="placeProfilePanel"><h3>Select a place</h3><p>Choose a place to see its visit patterns, duration distribution and journey context.</p></section>
@@ -8220,6 +8227,56 @@ Departed: ${end}</description>
         document.getElementById('qualityIssueList').innerHTML = issueRows.length ? issueRows.map(issue => `<div class="quality-issue" data-severity="${issue.severity}"><strong>${escapeHtml(issue.description)}</strong><br><small>${issue.at ? formatTimestamp(issue.at, 'D MMM YYYY, HH:mm') : 'No timestamp'} · ${issue.severity} confidence risk</small></div>`).join('') : '<p>No high-signal problems were found in these imported records.</p>';
     }
 
+    function renderJourneyDetail(journey, canonical) {
+        const metrics = PlacesAnalytics.buildJourneyAnalytics(journey);
+        const walking = PlacesAnalytics.buildWalkingAnalytics(journey, canonical.journeys);
+        const transit = PlacesAnalytics.buildPublicTransportAnalytics(journey, canonical.journeys, canonical.places);
+        const placeName = id => canonical.places.find(place => place.id === id)?.name || 'Unknown place';
+        const detail = document.getElementById('journeyAnalyticsDetail');
+        detail.innerHTML = `
+            <h4>${escapeHtml(formatActivityType(metrics.travelMode))}</h4>
+            <p>${escapeHtml(placeName(metrics.startPlaceId))} → ${escapeHtml(placeName(metrics.endPlaceId))}<br><small>${metrics.startAt ? formatTimestamp(metrics.startAt, 'D MMM YYYY, HH:mm') : 'Unknown start'}</small></p>
+            <div class="intelligence-grid">
+                <div class="intelligence-card"><span>Duration</span><strong>${formatAnalyticsDuration(metrics.durationMs)}</strong></div>
+                <div class="intelligence-card"><span>Distance</span><strong>${formatDistance(metrics.recordedDistanceMeters ?? metrics.calculatedDistanceMeters ?? 0)}</strong></div>
+                <div class="intelligence-card"><span>Average speed</span><strong>${metrics.averageSpeedKph === null ? '—' : `${metrics.averageSpeedKph.toFixed(1)} km/h`}</strong></div>
+                <div class="intelligence-card"><span>Quality</span><strong>${metrics.dataQualityScore}/100</strong></div>
+            </div>
+            <table class="profile-table">
+                <tr><td>Moving / stationary</td><td>${formatAnalyticsDuration(metrics.movingDurationMs)} / ${formatAnalyticsDuration(metrics.stationaryDurationMs)}</td></tr>
+                <tr><td>Median / maximum plausible speed</td><td>${metrics.medianSpeedKph === null ? '—' : `${metrics.medianSpeedKph.toFixed(1)} km/h`} / ${metrics.maximumPlausibleSpeedKph === null ? '—' : `${metrics.maximumPlausibleSpeedKph.toFixed(1)} km/h`}</td></tr>
+                <tr><td>Route directness</td><td>${metrics.routeDirectness === null ? '—' : `${(metrics.routeDirectness * 100).toFixed(0)}%`}</td></tr>
+                <tr><td>Recorded minus straight-line distance</td><td>${metrics.recordedMinusStraightMeters === null ? '—' : formatDistance(metrics.recordedMinusStraightMeters)}</td></tr>
+                <tr><td>Pauses</td><td>${metrics.pauses.length} · ${formatAnalyticsDuration(metrics.pauseDurationMs)}</td></tr>
+            </table>
+            ${walking ? `<h4>Walking detail</h4><table class="profile-table">
+                <tr><td>Average / median pace</td><td>${walking.averagePaceMinutesPerKilometre === null ? '—' : `${walking.averagePaceMinutesPerKilometre.toFixed(1)} min/km`} / ${walking.medianPaceMinutesPerKilometre === null ? '—' : `${walking.medianPaceMinutesPerKilometre.toFixed(1)} min/km`}</td></tr>
+                <tr><td>Fastest sustained pace</td><td>${walking.fastestSustainedPaceMinutesPerKilometre === null ? '—' : `${walking.fastestSustainedPaceMinutesPerKilometre.toFixed(1)} min/km`}</td></tr>
+                <tr><td>Route novelty</td><td>${walking.routeNoveltyPercent === null ? 'No earlier route to compare' : `${walking.routeNoveltyPercent.toFixed(0)}% new`}</td></tr>
+                <tr><td>Longest pause</td><td>${formatAnalyticsDuration(walking.longestPauseMs)}</td></tr>
+            </table>` : ''}
+            ${transit ? `<h4>Public transport inference</h4><p>${escapeHtml(transit.explanation)}</p><table class="profile-table">
+                <tr><td>Likely boarding / alighting</td><td>${escapeHtml(placeName(transit.likelyBoardingPlaceId))} / ${escapeHtml(placeName(transit.likelyAlightingPlaceId))}</td></tr>
+                <tr><td>Time aboard</td><td>${formatAnalyticsDuration(transit.timeAboardMs)}</td></tr>
+                <tr><td>Inference confidence</td><td>${transit.confidence}/100</td></tr>
+            </table>` : ''}`;
+    }
+
+    function renderJourneyAnalytics(canonical) {
+        const journeys = [...canonical.journeys].sort((a, b) => (b.interval.start || '').localeCompare(a.interval.start || ''));
+        const list = document.getElementById('journeyAnalyticsList');
+        list.innerHTML = journeys.length ? journeys.map((journey, index) => {
+            const metrics = PlacesAnalytics.buildJourneyAnalytics(journey);
+            return `<button class="place-analysis-row" data-journey-index="${index}"><span><strong>${escapeHtml(formatActivityType(journey.travelMode))}</strong><br><small>${journey.interval.start ? formatTimestamp(journey.interval.start, 'D MMM YYYY, HH:mm') : 'Unknown time'}</small></span><small>${formatDistance(metrics.recordedDistanceMeters ?? metrics.calculatedDistanceMeters ?? 0)} · ${formatAnalyticsDuration(metrics.durationMs)}</small></button>`;
+        }).join('') : '<p>No journeys are available.</p>';
+        list.querySelectorAll('[data-journey-index]').forEach(button => button.addEventListener('click', () => {
+            list.querySelectorAll('[data-journey-index]').forEach(row => row.classList.remove('active'));
+            button.classList.add('active');
+            renderJourneyDetail(journeys[Number(button.dataset.journeyIndex)], canonical);
+        }));
+        list.querySelector('[data-journey-index]')?.click();
+    }
+
     function discoverySettings() {
         let saved = {};
         try { saved = JSON.parse(localStorage.getItem('places.discovery.settings') || '{}'); } catch (_) {}
@@ -8380,6 +8437,7 @@ Departed: ${end}</description>
         loadReplay(canonical, selectedDate, timeZone);
         renderDataQuality(canonical, timeZone);
         await renderSuggestedPlaces(canonical, timeZone);
+        renderJourneyAnalytics(canonical);
         document.getElementById('summaryView').style.display = 'none';
         document.getElementById('map').classList.add('hidden');
         document.getElementById('intelligenceView').style.display = 'block';
