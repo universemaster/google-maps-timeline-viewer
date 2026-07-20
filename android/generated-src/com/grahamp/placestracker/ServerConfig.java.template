@@ -1,0 +1,7 @@
+package com.grahamp.placestracker;
+
+public final class ServerConfig {
+    public static final String DEFAULT_SERVER_BASE_URL = "__SERVER_BASE_URL__";
+    public static final String ACCESS_TOKEN = "__ACCESS_TOKEN__";
+    private ServerConfig() {}
+}

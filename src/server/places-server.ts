@@ -207,6 +207,8 @@ export async function createPlacesServer(input: Partial<PlacesServerConfig> = {}
       }
 
       const requestedPath = url.pathname === "/" ? "/timeline.html" : url.pathname;
+      const publicStaticPath = requestedPath === "/timeline.html" || requestedPath.startsWith("/assets/") || requestedPath === "/android/latest.apk";
+      if (!publicStaticPath) { json(response, 404, { error: "Not found." }); return; }
       const filePath = requestedPath === "/android/latest.apk" ? config.androidApkPath : resolve(config.rootDir, `.${requestedPath}`);
       if (requestedPath !== "/android/latest.apk" && filePath !== config.rootDir && !filePath.startsWith(`${resolve(config.rootDir)}${sep}`)) { json(response, 403, { error: "Forbidden." }); return; }
       const fileStat = await stat(filePath).catch(() => null);

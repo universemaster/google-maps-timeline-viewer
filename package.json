@@ -12,7 +12,9 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "server:start": "npm run build && node dist/src/server/places-server.js"
+    "server:start": "./scripts/start-places-server.sh",
+    "android:build": "./scripts/build-android-apk.sh",
+    "android:install": "./scripts/install-android-app.sh"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

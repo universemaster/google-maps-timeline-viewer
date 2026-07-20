@@ -9,7 +9,7 @@ The viewer remains local-first. Imported Timeline files are authoritative, raw s
 3. A correction log applies non-destructive place, visit, boundary and annotation changes.
 4. Pure analytics modules calculate statistics, coverage, confidence, profiles, journeys, routines and anomalies without accessing the DOM.
 5. A Web Worker runs expensive calculations and reports progress and cancellation.
-6. Versioned IndexedDB stores corrections and derived caches. Cache keys include the import fingerprint, schema version, algorithm version, settings and edit revision.
+6. Versioned IndexedDB stores corrections and derived caches in standalone mode. In explicit `server=1` mode the same persistence API uses the authenticated foreground Mac server instead.
 7. Views consume one reconciled metric model so cards, charts, tables and exports agree.
 
 The existing `timeline.html`, `TimelineEdits.json` and `TimelinePlaceCache.json` workflows remain compatibility surfaces during migration.
@@ -28,4 +28,4 @@ Corrections are append-only commands with revisions and undo relationships. Merg
 
 ## Local data boundary
 
-No live tracking, background collection, sharing service, subscription backend, emergency feature or continuously active native application is part of this architecture. Optional locally stored sources may enrich an analysis, but core Timeline calculations cannot depend on them.
+No live tracking, background collection, sharing service, subscription backend, emergency feature or continuously active native application is part of this architecture. The optional Mac server is manually started, binds for Tailscale access, and is the only owner of Android-originated state. It serves a normalised snapshot of the imported Timeline but never modifies the raw export. Mutations atomically update the tracked server-state JSON and create a path-scoped Git commit. Optional locally stored sources may enrich an analysis, but core Timeline calculations cannot depend on them.

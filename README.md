@@ -29,7 +29,7 @@ If you're like me, you have years worth of timeline data that you want to be abl
 - Compound search across time, place, movement, annotations, confidence, revisit intervals, and geographic areas
 - Local-first background analytics with visible progress, cancellation, and versioned IndexedDB caching
 
-The analytical workspace uses only imported Timeline data and local browser storage. It does not add live tracking, sharing, crash detection, alerts, accounts, subscriptions, or a server-side personal-data service.
+The analytical workspace uses only imported Timeline data. By default it uses local browser storage; the optional foreground Mac server described below gives the Android app one shared, Git-backed data store. It does not add live tracking, background collection, sharing, crash detection, alerts, accounts, or subscriptions.
 
 <p align="center">
   <a href="/screenshot.png"><img src="/screenshot.png?raw=true" alt="Map View" width="48%"></a>
@@ -123,6 +123,19 @@ Without one, Google Maps rendering, area search, world view, and live Google pla
         - For On-Device exported data: Simply choose the folder that contains your exported Timeline.json file.
     - Note that on Android you may not be allowed to load the data if it's in certain folders, such as Downloads -- move the data file to an accessible location.
     - Once data are loaded, choose **Analyse** to open the continuously scrollable intelligence workspace. All corrections, annotations, suggestion decisions, and derived caches stay in local browser storage.
+
+## Android app with your Mac as the server
+
+The native Android app is a foreground-only WebView client for the same responsive viewer. It requests no location permission and declares no service, receiver, scheduled worker, or background task. Your Mac reads the imported Timeline and owns the shared annotations, rules, place corrections, suggestion decisions, analytics cache, and legacy Timeline edits.
+
+1. Keep Tailscale connected on the Mac and phone.
+2. On the Mac, run `npm run server:start`. This command stays in the Terminal foreground and stops with Control-C.
+3. Build and install with `npm run android:install`. If no phone is connected, the signed APK remains at `build/android/PlacesTrackerAndroid-debug.apk` and is available while the server is running at `http://grahams-macbook-air.tailcc5a23.ts:8787/android/latest.apk`.
+4. Open Places Tracker on Android. Its default server is `http://grahams-macbook-air.tailcc5a23.ts:8787`; the **Mac** button lets you change that address.
+
+The first build creates a private `.places-server-token`, embeds it in the APK, and keeps it out of Git. API requests require this token, and the server exposes only the viewer assets and APK—not the raw Timeline file. Each saved mutation is written atomically to `data/places-server-state.json` and committed by itself to the local Git repository. Set `PLACES_GIT_PUSH=1` only if you also want every server mutation pushed automatically.
+
+The server currently defaults to `combined_location_history_dedupe_work/staging/unique_data_files/0016_Timeline.json`. Point it at a different import with `PLACES_TIMELINE_PATH=/absolute/path/to/Timeline.json npm run server:start`.
 
 ## Development and verification
 

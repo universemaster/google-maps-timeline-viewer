@@ -49,6 +49,7 @@ describe("Places Mac server", () => {
       expect((await fetch(`http://127.0.0.1:${port}/api/bootstrap`)).status).toBe(401);
       const bootstrap = await (await fetch(`http://127.0.0.1:${port}/api/bootstrap`, { headers: { "X-Places-Token": token } })).json() as { timeline: { visits: unknown[] } };
       expect(bootstrap.timeline.visits).toHaveLength(1);
+      expect((await fetch(`http://127.0.0.1:${port}/Timeline.json`)).status).toBe(404);
 
       const annotation = { id: "annotation-one", visitId: "visit-one", note: "Tea with Jo" };
       expect((await fetch(`http://127.0.0.1:${port}/api/state/annotations`, { method: "PUT", headers: { "Content-Type": "application/json", "X-Places-Token": token }, body: JSON.stringify(annotation) })).status).toBe(200);
