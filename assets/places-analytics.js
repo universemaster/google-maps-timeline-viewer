@@ -1078,6 +1078,7 @@ var PlacesAnalytics = (() => {
   var browser_api_exports = {};
   __export(browser_api_exports, {
     DEFAULT_PLACE_DISCOVERY_SETTINGS: () => DEFAULT_PLACE_DISCOVERY_SETTINGS,
+    applyCorrections: () => applyCorrections,
     buildDataQualityDashboard: () => buildDataQualityDashboard,
     buildDataQualitySummary: () => buildDataQualitySummary,
     buildPlaceProfile: () => buildPlaceProfile,
@@ -1092,6 +1093,7 @@ var PlacesAnalytics = (() => {
     normalizeTimeline: () => normalizeTimeline,
     percentile: () => percentile,
     percentileRank: () => percentileRank,
+    placesPersistence: () => placesPersistence,
     replayStateAt: () => replayStateAt,
     scoreJourney: () => scoreJourney,
     scoreVisit: () => scoreVisit,
@@ -6079,5 +6081,132 @@ var PlacesAnalytics = (() => {
       }];
     }).sort((left, right) => right.confidence - left.confidence || right.totalDurationMs - left.totalDurationMs);
   }
+
+  // src/model/corrections.ts
+  function clonePlace(place) {
+    return { ...place, coordinates: place.coordinates ? { ...place.coordinates } : null, tags: [...place.tags], sourceReferences: [...place.sourceReferences] };
+  }
+  function applyCorrections(sourcePlaces, sourceVisits, commands) {
+    const undone = new Set(commands.filter((command) => command.type === "undo").map((command) => command.targetCommandId));
+    const active = commands.filter((command) => command.type !== "undo" && !undone.has(command.id)).sort((left, right) => left.revision - right.revision || left.createdAt.localeCompare(right.createdAt));
+    const places = new Map(sourcePlaces.map((place) => [place.id, clonePlace(place)]));
+    const visits = new Map(sourceVisits.map((visit) => [visit.id, { ...visit }]));
+    const aliases = {};
+    const resolveAlias = (placeId) => {
+      let resolved = placeId;
+      const seen = /* @__PURE__ */ new Set();
+      while (aliases[resolved] && !seen.has(resolved)) {
+        seen.add(resolved);
+        resolved = aliases[resolved];
+      }
+      return resolved;
+    };
+    active.forEach((command) => {
+      if (command.type === "rename-place") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) place.name = command.name;
+      } else if (command.type === "categorise-place") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) place.category = command.category;
+      } else if (command.type === "move-place") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) place.coordinates = { ...command.coordinates };
+      } else if (command.type === "change-boundary") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) place.boundary = command.boundary;
+      } else if (command.type === "ignore-place") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) place.ignored = command.ignored;
+      } else if (command.type === "update-place-notes") {
+        const place = places.get(resolveAlias(command.placeId));
+        if (place) {
+          place.notes = command.notes;
+          place.tags = [...command.tags];
+        }
+      } else if (command.type === "reassign-visit") {
+        const visit = visits.get(command.visitId);
+        if (visit && places.has(resolveAlias(command.placeId))) visit.placeId = resolveAlias(command.placeId);
+      } else if (command.type === "merge-places") {
+        const targetId = resolveAlias(command.targetPlaceId);
+        const target = places.get(targetId) ?? places.get(resolveAlias(command.sourcePlaceIds[0] ?? ""));
+        if (!target) return;
+        if (!places.has(targetId)) places.set(targetId, { ...clonePlace(target), id: targetId });
+        const mergedTarget = places.get(targetId);
+        mergedTarget.name = command.name;
+        command.sourcePlaceIds.forEach((sourceId) => {
+          const resolvedSource = resolveAlias(sourceId);
+          if (resolvedSource === targetId) return;
+          aliases[resolvedSource] = targetId;
+          const source = places.get(resolvedSource);
+          if (source) source.ignored = true;
+          visits.forEach((visit) => {
+            if (resolveAlias(visit.placeId) === targetId || visit.placeId === resolvedSource) visit.placeId = targetId;
+          });
+        });
+      } else if (command.type === "split-place") {
+        places.set(command.newPlace.id, clonePlace(command.newPlace));
+        const selected = new Set(command.visitIds);
+        visits.forEach((visit) => {
+          if (selected.has(visit.id) && resolveAlias(visit.placeId) === resolveAlias(command.sourcePlaceId)) visit.placeId = command.newPlace.id;
+        });
+      }
+    });
+    visits.forEach((visit) => {
+      visit.placeId = resolveAlias(visit.placeId);
+    });
+    return { places: [...places.values()], visits: [...visits.values()], aliases };
+  }
+
+  // src/persistence/database.ts
+  var DATABASE_NAME = "PlacesTrackerAnalyticsDB";
+  var DATABASE_VERSION = 1;
+  function requestResult(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed."));
+    });
+  }
+  function openPlacesDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains("corrections")) database.createObjectStore("corrections", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("annotations")) database.createObjectStore("annotations", { keyPath: "id" });
+        if (!database.objectStoreNames.contains("suggestion-decisions")) database.createObjectStore("suggestion-decisions", { keyPath: "suggestionId" });
+        if (!database.objectStoreNames.contains("analytics-cache")) database.createObjectStore("analytics-cache", { keyPath: "key" });
+        if (!database.objectStoreNames.contains("settings")) database.createObjectStore("settings", { keyPath: "key" });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("Unable to open the places database."));
+    });
+  }
+  async function put(storeName, value) {
+    const database = await openPlacesDatabase();
+    try {
+      const transaction = database.transaction(storeName, "readwrite");
+      await requestResult(transaction.objectStore(storeName).put(value));
+    } finally {
+      database.close();
+    }
+  }
+  async function getAll(storeName) {
+    const database = await openPlacesDatabase();
+    try {
+      return await requestResult(database.transaction(storeName, "readonly").objectStore(storeName).getAll());
+    } finally {
+      database.close();
+    }
+  }
+  var placesPersistence = {
+    putCorrection: (command) => put("corrections", command),
+    getCorrections: () => getAll("corrections"),
+    putAnnotation: (annotation) => put("annotations", annotation),
+    getAnnotations: () => getAll("annotations"),
+    putSuggestionDecision: (decision) => put("suggestion-decisions", decision),
+    getSuggestionDecisions: () => getAll("suggestion-decisions"),
+    putCache: (record2) => put("analytics-cache", record2),
+    getCacheRecords: () => getAll("analytics-cache")
+  };
   return __toCommonJS(browser_api_exports);
 })();

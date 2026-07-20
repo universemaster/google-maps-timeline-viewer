@@ -8,3 +8,5 @@ export { summarizeDistribution, percentile, percentileRank, movingAverage } from
 export { dayInterval, localParts } from "./analytics/time.js";
 export { buildReplayPlan, replayStateAt, nextPausePoint } from "./analytics/replay.js";
 export { discoverPlaces, DEFAULT_PLACE_DISCOVERY_SETTINGS } from "./analytics/place-discovery.js";
+export { applyCorrections } from "./model/corrections.js";
+export { placesPersistence } from "./persistence/database.js";
