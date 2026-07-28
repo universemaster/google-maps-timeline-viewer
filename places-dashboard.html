@@ -1,0 +1,1848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Places, Visits, and Overnight Stays</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        :root {
+            --bg: #f6f7f8;
+            --panel: #ffffff;
+            --ink: #202428;
+            --muted: #5e6872;
+            --line: #d8dde3;
+            --blue: #2f6fbd;
+            --green: #1f7a5c;
+            --amber: #b76619;
+            --red: #b73535;
+            --shadow: 0 8px 24px rgba(20, 28, 38, 0.08);
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            overflow: hidden;
+        }
+        button, input, select {
+            font: inherit;
+        }
+        .shell {
+            display: grid;
+            grid-template-columns: 320px minmax(0, 1fr);
+            height: 100vh;
+            min-height: 640px;
+        }
+        aside {
+            background: var(--panel);
+            border-right: 1px solid var(--line);
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            z-index: 2;
+        }
+        .brand {
+            padding: 18px 18px 14px;
+            border-bottom: 1px solid var(--line);
+        }
+        h1 {
+            font-size: 20px;
+            line-height: 1.15;
+            margin: 0 0 8px;
+            letter-spacing: 0;
+        }
+        .meta {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            padding: 14px;
+            border-bottom: 1px solid var(--line);
+        }
+        .metric {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 10px;
+            min-height: 72px;
+            background: #fbfcfd;
+        }
+        .metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-bottom: 6px;
+        }
+        .metric strong {
+            font-size: 24px;
+            line-height: 1;
+        }
+        .controls {
+            display: grid;
+            gap: 10px;
+            padding: 14px;
+            border-bottom: 1px solid var(--line);
+        }
+        .field label {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        .field input, .field select {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: white;
+            padding: 9px 10px;
+            color: var(--ink);
+        }
+        .toggle-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .toggle-row button, .tabs button {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 9px 10px;
+            background: white;
+            color: var(--ink);
+            cursor: pointer;
+        }
+        .toggle-row button.active, .tabs button.active {
+            background: #eaf2ff;
+            border-color: #9fbee8;
+            color: #174d8f;
+        }
+        .sidebar-table {
+            overflow: auto;
+            padding: 14px;
+        }
+        .year-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .year-table th, .year-table td {
+            padding: 8px 6px;
+            border-bottom: 1px solid var(--line);
+            text-align: right;
+            white-space: nowrap;
+        }
+        .year-table th:first-child, .year-table td:first-child {
+            text-align: left;
+        }
+        main {
+            min-width: 0;
+            display: grid;
+            grid-template-rows: minmax(300px, 40vh) auto auto minmax(0, 1fr);
+            height: 100vh;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+            min-height: 310px;
+            overflow: hidden;
+            border-bottom: 1px solid var(--line);
+            background: #dde4ea;
+        }
+        .leaflet-container {
+            z-index: 0;
+        }
+        .map-status {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 500;
+            background: rgba(255,255,255,.94);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 9px 11px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+        .tabs {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 14px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            overflow-x: auto;
+        }
+        .tabs button {
+            min-width: 100px;
+            white-space: nowrap;
+        }
+        .table-wrap {
+            overflow: auto;
+            background: var(--panel);
+        }
+        .analysis-board {
+            overflow: auto;
+            height: 100%;
+            padding: 14px;
+            background: var(--panel);
+        }
+        .analysis-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .analysis-toolbar h2 {
+            margin: 0;
+            font-size: 16px;
+            line-height: 1.2;
+            letter-spacing: 0;
+        }
+        .analysis-toolbar select {
+            min-width: 190px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: white;
+            padding: 8px 10px;
+            color: var(--ink);
+        }
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 12px;
+            align-items: start;
+        }
+        .analysis-card {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #fbfcfd;
+            padding: 12px;
+            min-width: 0;
+            cursor: pointer;
+        }
+        .analysis-card.selected {
+            border-color: #8db7c1;
+            box-shadow: inset 0 0 0 2px #dceff3;
+            background: #f6fbfc;
+        }
+        .analysis-card h3 {
+            margin: 0 0 5px;
+            font-size: 14px;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+        .analysis-meta {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.35;
+            min-height: 32px;
+        }
+        .analysis-value {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            margin: 10px 0 8px;
+        }
+        .analysis-value strong {
+            font-size: 24px;
+            line-height: 1;
+        }
+        .analysis-value span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .analysis-chart {
+            width: 100%;
+            height: 92px;
+            margin-bottom: 8px;
+            display: block;
+            overflow: visible;
+        }
+        .analysis-chart text {
+            fill: #44515f;
+            font-size: 10px;
+        }
+        .analysis-chart .bar {
+            fill: #347f83;
+        }
+        .analysis-chart .line {
+            fill: none;
+            stroke: #2f6fbd;
+            stroke-width: 2;
+        }
+        .analysis-chart .dot {
+            fill: #2f6fbd;
+        }
+        .analysis-mini-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .analysis-mini-table td {
+            border-top: 1px solid var(--line);
+            padding: 5px 4px;
+            vertical-align: top;
+        }
+        .analysis-mini-table td:last-child {
+            text-align: right;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        .detail-panel {
+            display: none;
+            overflow: auto;
+            max-height: 360px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            padding: 14px;
+        }
+        .detail-panel.visible {
+            display: block;
+        }
+        .detail-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+        .detail-title {
+            font-size: 18px;
+            line-height: 1.2;
+            font-weight: 750;
+        }
+        .icon-button {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            color: var(--ink);
+        }
+        .detail-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .detail-metric {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #fbfcfd;
+            padding: 9px 10px;
+            min-height: 64px;
+        }
+        .detail-metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-bottom: 5px;
+        }
+        .detail-metric strong {
+            font-size: 19px;
+            line-height: 1.1;
+        }
+        .detail-sections {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 14px;
+        }
+        .detail-section {
+            min-width: 0;
+        }
+        .detail-section h2 {
+            margin: 0 0 7px;
+            font-size: 13px;
+            line-height: 1.2;
+            letter-spacing: 0;
+        }
+        .mini-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .mini-table th,
+        .mini-table td {
+            border-bottom: 1px solid var(--line);
+            padding: 6px 6px;
+            text-align: left;
+            white-space: nowrap;
+            vertical-align: top;
+        }
+        .mini-table th {
+            color: #33404d;
+            background: #f2f4f6;
+            position: sticky;
+            top: 0;
+        }
+        .mini-scroll {
+            overflow: auto;
+            max-height: 190px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+        }
+        table.data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .data-table th {
+            position: sticky;
+            top: 0;
+            background: #f2f4f6;
+            color: #33404d;
+            font-weight: 650;
+            z-index: 1;
+        }
+        .data-table th, .data-table td {
+            border-bottom: 1px solid var(--line);
+            padding: 9px 10px;
+            text-align: left;
+            vertical-align: top;
+            white-space: nowrap;
+        }
+        .data-table tbody tr {
+            cursor: pointer;
+        }
+        .data-table tbody tr:hover {
+            background: #f6fafe;
+        }
+        .data-table tbody tr.selected {
+            background: #edf6f8;
+            box-shadow: inset 3px 0 0 #347f83;
+        }
+        .data-table .num {
+            text-align: right;
+        }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            border: 1px solid var(--line);
+            background: #f7f8f9;
+        }
+        .pill.home {
+            color: var(--green);
+            border-color: #a8d4c4;
+            background: #edf8f3;
+        }
+        .pill.away {
+            color: var(--red);
+            border-color: #e5b0b0;
+            background: #fff0f0;
+        }
+        .pill.work {
+            color: var(--blue);
+            border-color: #abc8ef;
+            background: #edf4ff;
+        }
+        .place-name {
+            font-weight: 650;
+            max-width: 360px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .subtle {
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .leaflet-popup-content {
+            margin: 10px 12px;
+            min-width: 210px;
+        }
+        .popup-title {
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        @media (max-width: 900px) {
+            body { overflow: auto; }
+            .shell {
+                display: block;
+                height: auto;
+                min-height: 0;
+            }
+            aside {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+            main {
+                height: auto;
+                min-height: 760px;
+                grid-template-rows: 360px auto auto 520px;
+            }
+            .metric-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+            .detail-sections {
+                grid-template-columns: 1fr;
+            }
+        }
+        @media (max-width: 640px) {
+            .metric-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .detail-metrics {
+                grid-template-columns: 1fr 1fr;
+            }
+            .analysis-toolbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+            .analysis-toolbar select {
+                width: 100%;
+            }
+            .analysis-grid {
+                grid-template-columns: 1fr;
+            }
+            .tabs {
+                overflow-x: auto;
+            }
+            .tabs button {
+                min-width: 92px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <aside>
+            <div class="brand">
+                <h1>Places, Visits, Overnight Stays</h1>
+                <div class="meta" id="dataMeta">Loading local data...</div>
+            </div>
+            <div class="metric-grid">
+                <div class="metric"><span>Places</span><strong id="placesMetric">0</strong></div>
+                <div class="metric"><span>Visits</span><strong id="visitsMetric">0</strong></div>
+                <div class="metric"><span>Away nights</span><strong id="awayMetric">0</strong></div>
+                <div class="metric"><span>Home nights</span><strong id="homeMetric">0</strong></div>
+                <div class="metric"><span>Map activity</span><strong id="activityMetric">0</strong></div>
+                <div class="metric"><span>Activity places</span><strong id="activityPlacesMetric">0</strong></div>
+            </div>
+            <div class="controls">
+                <div class="field">
+                    <label for="searchInput">Search places</label>
+                    <input id="searchInput" type="search" placeholder="Home, work, coordinates, type">
+                </div>
+                <div class="field">
+                    <label for="yearSelect">Year</label>
+                    <select id="yearSelect"></select>
+                </div>
+                <div class="toggle-row">
+                    <button id="homeToggle" class="active" type="button">Include home</button>
+                    <button id="awayToggle" class="active" type="button">Include away</button>
+                </div>
+            </div>
+            <div class="sidebar-table">
+                <table class="year-table">
+                    <thead>
+                        <tr><th>Year</th><th>Away</th><th>Home</th><th>Places</th></tr>
+                    </thead>
+                    <tbody id="yearSummaryBody"></tbody>
+                </table>
+            </div>
+        </aside>
+        <main>
+            <div style="position: relative;">
+                <div id="map"></div>
+                <div class="map-status" id="mapStatus">Map markers show the active table</div>
+            </div>
+            <div class="tabs">
+                <button class="active" type="button" data-tab="places">Places</button>
+                <button type="button" data-tab="duration">By duration</button>
+                <button type="button" data-tab="placeYears">Place years</button>
+                <button type="button" data-tab="analysis">Analysis</button>
+                <button type="button" data-tab="overnights">Overnights</button>
+                <button type="button" data-tab="visits">Visits</button>
+                <button type="button" data-tab="activityPlaces">Activity places</button>
+                <button type="button" data-tab="activities">Activity</button>
+                <button type="button" data-tab="years">Years</button>
+                <button type="button" data-tab="sources">Sources</button>
+            </div>
+            <section class="detail-panel" id="detailPanel"></section>
+            <div class="table-wrap">
+                <section class="analysis-board" id="analysisBoard" hidden></section>
+                <table class="data-table" id="dataTable">
+                    <thead id="tableHead"></thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script src="places_dashboard_data.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const data = window.PLACES_DASHBOARD_DATA;
+        const state = {
+            tab: "places",
+            year: "all",
+            search: "",
+            includeHome: true,
+            includeAway: true,
+            selectedPlaceId: null,
+            analysisCategory: "all",
+            selectedAnalysisId: "",
+            map: null,
+            layer: null,
+        };
+
+        const placesById = new Map(data.places.map(place => [place.id, place]));
+        const visitsByPlace = groupBy(data.visits || [], visit => visit.placeId);
+        const overnightsByPlace = groupBy(data.overnights || [], night => night.placeId);
+        const activityPlaces = data.activityPlaces || [];
+        const mapActivities = data.mapActivities || [];
+        const sourceCoverage = data.sourceCoverage || [];
+        const activityPlacesById = new Map(activityPlaces.map(place => [place.id, place]));
+        const activityPlaceIdsByConfirmedPlace = groupBy(activityPlaces.filter(place => place.confirmedPlaceId), place => place.confirmedPlaceId);
+        const mapActivitiesByActivityPlace = groupBy(mapActivities, activity => activity.activityPlaceId);
+        const placeAnalysisCache = new Map();
+        let placeYearRowsCache = null;
+        const formatNumber = value => Number(value || 0).toLocaleString();
+        const formatHours = value => `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}h`;
+        const formatCompactHours = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
+        const basename = value => String(value || "").split("/").pop();
+        const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char]));
+        const placeClass = item => item.isHome ? "home" : item.isWork ? "work" : "away";
+        const placeLabel = item => item.isHome ? "Home" : item.isWork ? "Work" : "Away";
+        const adminSummary = place => [place?.locality, place?.county, place?.country].filter((value, index, items) => value && items.indexOf(value) === index).join(", ");
+        const homeDistanceText = place => place?.distanceFromHomeMiles === null || place?.distanceFromHomeMiles === undefined ? "" : `${place.distanceFromHomeMiles} mi`;
+
+        function groupBy(items, keyFn) {
+            const grouped = new Map();
+            items.forEach(item => {
+                const key = keyFn(item);
+                if (!key) return;
+                if (!grouped.has(key)) grouped.set(key, []);
+                grouped.get(key).push(item);
+            });
+            return grouped;
+        }
+
+        function init() {
+            document.getElementById("placesMetric").textContent = formatNumber(data.totals.places);
+            document.getElementById("visitsMetric").textContent = formatNumber(data.totals.visits);
+            document.getElementById("awayMetric").textContent = formatNumber(data.totals.awayNights);
+            document.getElementById("homeMetric").textContent = formatNumber(data.totals.homeNights);
+            document.getElementById("activityMetric").textContent = formatNumber(data.totals.mapActivities);
+            document.getElementById("activityPlacesMetric").textContent = formatNumber(data.totals.activityPlaces);
+            document.getElementById("dataMeta").textContent = `${data.totals.overnights.toLocaleString()} known nights, ${formatNumber(data.totals.mapActivities)} map activity events, generated ${data.meta.generatedAt.slice(0, 10)}`;
+
+            const yearSelect = document.getElementById("yearSelect");
+            yearSelect.innerHTML = `<option value="all">All years</option>` + data.yearSummary.map(row => `<option value="${row.year}">${row.year}</option>`).join("");
+            yearSelect.addEventListener("change", event => {
+                state.year = event.target.value;
+                render();
+            });
+            document.getElementById("searchInput").addEventListener("input", event => {
+                state.search = event.target.value.trim().toLowerCase();
+                render();
+            });
+            document.getElementById("homeToggle").addEventListener("click", () => {
+                state.includeHome = !state.includeHome;
+                document.getElementById("homeToggle").classList.toggle("active", state.includeHome);
+                render();
+            });
+            document.getElementById("awayToggle").addEventListener("click", () => {
+                state.includeAway = !state.includeAway;
+                document.getElementById("awayToggle").classList.toggle("active", state.includeAway);
+                render();
+            });
+            document.querySelectorAll(".tabs button").forEach(button => {
+                button.addEventListener("click", () => {
+                    state.tab = button.dataset.tab;
+                    document.querySelectorAll(".tabs button").forEach(item => item.classList.toggle("active", item === button));
+                    render();
+                });
+            });
+
+            renderYearSummary();
+            initMap();
+            render();
+        }
+
+        function initMap() {
+            state.map = L.map("map", { preferCanvas: true, zoomControl: true });
+            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                maxZoom: 18,
+                attribution: "&copy; OpenStreetMap contributors"
+            }).addTo(state.map);
+            state.layer = L.layerGroup().addTo(state.map);
+        }
+
+        function renderYearSummary() {
+            document.getElementById("yearSummaryBody").innerHTML = data.yearSummary.map(row => `
+                <tr>
+                    <td>${row.year}</td>
+                    <td>${formatNumber(row.awayNights)}</td>
+                    <td>${formatNumber(row.homeNights)}</td>
+                    <td>${formatNumber(row.awayPlaces)}</td>
+                </tr>
+            `).join("");
+        }
+
+        function dateFromIso(value) {
+            return value ? value.slice(0, 10) : "";
+        }
+
+        function newRollup(year) {
+            return {
+                year,
+                visitCount: 0,
+                visitHours: 0,
+                overnightCount: 0,
+                awayOvernightCount: 0,
+                activityCount: 0,
+                activeDates: new Set(),
+                firstSeen: "",
+                lastSeen: "",
+            };
+        }
+
+        function mergeFirstLast(target, value) {
+            if (!value) return;
+            target.firstSeen = target.firstSeen ? Math.min(target.firstSeen, value) : value;
+            target.lastSeen = target.lastSeen ? Math.max(target.lastSeen, value) : value;
+        }
+
+        function analysisForPlace(placeId) {
+            if (placeAnalysisCache.has(placeId)) return placeAnalysisCache.get(placeId);
+            const place = placesById.get(placeId);
+            if (!place) return null;
+            const visits = (visitsByPlace.get(placeId) || []).slice().sort((a, b) => b.startUtc.localeCompare(a.startUtc));
+            const nights = (overnightsByPlace.get(placeId) || []).slice().sort((a, b) => b.nightDate.localeCompare(a.nightDate));
+            const relatedActivityPlaceIds = (activityPlaceIdsByConfirmedPlace.get(placeId) || []).map(item => item.id);
+            const activities = relatedActivityPlaceIds.flatMap(id => mapActivitiesByActivityPlace.get(id) || []).sort((a, b) => String(b.timeUtc).localeCompare(String(a.timeUtc)));
+            const years = new Map();
+            const dates = new Map();
+            let longestVisit = null;
+
+            function ensureYear(year) {
+                if (!years.has(year)) years.set(year, newRollup(year));
+                return years.get(year);
+            }
+
+            function ensureDate(date) {
+                if (!dates.has(date)) {
+                    dates.set(date, {
+                        date,
+                        visitCount: 0,
+                        visitHours: 0,
+                        overnightCount: 0,
+                        awayOvernightCount: 0,
+                        activityCount: 0,
+                        firstSeen: "",
+                        lastSeen: "",
+                    });
+                }
+                return dates.get(date);
+            }
+
+            visits.forEach(visit => {
+                const year = visit.startUtc.slice(0, 4);
+                const date = visit.startLocalDate || dateFromIso(visit.startUtc);
+                const hours = Number(visit.durationHours || 0);
+                const yearRow = ensureYear(year);
+                const dateRow = ensureDate(date);
+                yearRow.visitCount += 1;
+                yearRow.visitHours += hours;
+                yearRow.activeDates.add(date);
+                mergeFirstLast(yearRow, date);
+                dateRow.visitCount += 1;
+                dateRow.visitHours += hours;
+                mergeFirstLast(dateRow, visit.startUtc);
+                if (!longestVisit || hours > Number(longestVisit.durationHours || 0)) longestVisit = visit;
+            });
+
+            nights.forEach(night => {
+                const year = String(night.year);
+                const date = night.nightDate;
+                const yearRow = ensureYear(year);
+                const dateRow = ensureDate(date);
+                yearRow.overnightCount += 1;
+                if (!night.isHome) yearRow.awayOvernightCount += 1;
+                yearRow.activeDates.add(date);
+                mergeFirstLast(yearRow, date);
+                dateRow.overnightCount += 1;
+                if (!night.isHome) dateRow.awayOvernightCount += 1;
+            });
+
+            activities.forEach(activity => {
+                const date = activity.localDate || dateFromIso(activity.timeUtc);
+                if (!date) return;
+                const year = String(activity.year || date.slice(0, 4));
+                const yearRow = ensureYear(year);
+                const dateRow = ensureDate(date);
+                yearRow.activityCount += 1;
+                yearRow.activeDates.add(date);
+                mergeFirstLast(yearRow, date);
+                dateRow.activityCount += 1;
+            });
+
+            const yearRows = Array.from(years.values()).map(row => ({
+                ...row,
+                activeDateCount: row.activeDates.size,
+                averageVisitHours: row.visitCount ? row.visitHours / row.visitCount : 0,
+                visitHours: Number(row.visitHours.toFixed(2)),
+                activeDates: undefined,
+            })).sort((a, b) => Number(b.year) - Number(a.year));
+
+            const dateRows = Array.from(dates.values()).map(row => ({
+                ...row,
+                visitHours: Number(row.visitHours.toFixed(2)),
+            })).sort((a, b) => b.date.localeCompare(a.date));
+
+            const totalVisitHours = visits.reduce((sum, visit) => sum + Number(visit.durationHours || 0), 0);
+            const analysis = {
+                place,
+                visits,
+                nights,
+                activities,
+                years: yearRows,
+                dates: dateRows,
+                totalVisitHours: Number(totalVisitHours.toFixed(2)),
+                averageVisitHours: visits.length ? totalVisitHours / visits.length : 0,
+                longestVisit,
+                activeDateCount: dateRows.length,
+                firstSeen: dateRows.length ? dateRows[dateRows.length - 1].date : place.firstSeen,
+                lastSeen: dateRows.length ? dateRows[0].date : place.lastSeen,
+            };
+            placeAnalysisCache.set(placeId, analysis);
+            return analysis;
+        }
+
+        function placeYearRows() {
+            if (placeYearRowsCache) return placeYearRowsCache;
+            placeYearRowsCache = [];
+            data.places.forEach(place => {
+                const analysis = analysisForPlace(place.id);
+                if (!analysis) return;
+                analysis.years.forEach(row => {
+                    placeYearRowsCache.push({
+                        ...row,
+                        placeId: place.id,
+                        placeLabel: place.label,
+                        isHome: place.isHome,
+                        isWork: place.isWork,
+                        lat: place.lat,
+                        lng: place.lng,
+                        semanticType: place.semanticType,
+                        geocodeSource: place.geocodeSource,
+                    });
+                });
+            });
+            placeYearRowsCache.sort((a, b) => b.visitHours - a.visitHours || b.visitCount - a.visitCount || b.overnightCount - a.overnightCount);
+            return placeYearRowsCache;
+        }
+
+        function genericLabel(label) {
+            const lowered = String(label || "").toLowerCase();
+            return lowered.startsWith("unknown near ")
+                || lowered.startsWith("searched address near ")
+                || lowered.startsWith("inferred work near ")
+                || lowered.startsWith("aliased location near ")
+                || lowered.startsWith("overnight area near ");
+        }
+
+        function analysisMetric(value, unit) {
+            const number = Number(value || 0);
+            if (unit === "hours") return formatHours(number);
+            if (unit === "days") return `${formatNumber(number)} days`;
+            if (unit === "nights") return `${formatNumber(number)} nights`;
+            if (unit === "visits") return `${formatNumber(number)} visits`;
+            if (unit === "places") return `${formatNumber(number)} places`;
+            if (unit === "counties") return `${formatNumber(number)} counties`;
+            if (unit === "years") return `${formatNumber(number)} years`;
+            if (unit === "events") return `${formatNumber(number)} events`;
+            if (unit === "percent") return `${number.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+            return formatNumber(number);
+        }
+
+        function analysisRow(label, value, detail = "", extra = {}) {
+            return {
+                ...extra,
+                label: String(label || "Unknown"),
+                value: Number(value || 0),
+                detail,
+            };
+        }
+
+        function sortAnalysisRows(rows) {
+            return rows.filter(row => Number.isFinite(row.value)).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+        }
+
+        function chronologicalRows(rows) {
+            return rows.filter(row => Number.isFinite(row.value)).sort((a, b) => a.label.localeCompare(b.label));
+        }
+
+        function setRowLocation(row, place) {
+            if (!place || row.lat !== undefined) return;
+            row.lat = place.lat;
+            row.lng = place.lng;
+            row.placeId = place.id;
+            row.isHome = place.isHome;
+            row.isWork = place.isWork;
+        }
+
+        function makeAnalysis(id, title, category, summary, unit, rows, chart = "bar", trend = false, primaryValue = null) {
+            const cleanRows = trend ? chronologicalRows(rows) : sortAnalysisRows(rows);
+            const headlineShouldRank = !trend || /average|longest|top|most recurring/i.test(title);
+            const metricValue = primaryValue === null
+                ? (headlineShouldRank ? (cleanRows[0]?.value || 0) : cleanRows.reduce((sum, row) => sum + row.value, 0))
+                : primaryValue;
+            return { id, title, category, summary, unit, rows: cleanRows, chart, trend, metricValue };
+        }
+
+        function buildAnalysisCatalog() {
+            const ctxPlaces = filterPlaces();
+            const allowedPlaces = new Set(ctxPlaces.map(place => place.id));
+            const ctxVisits = filterVisits().filter(visit => allowedPlaces.has(visit.placeId));
+            const ctxNights = filterOvernights().filter(night => allowedPlaces.has(night.placeId));
+            const ctxActivities = filterActivities();
+            const ctxActivityPlaces = filterActivityPlaces();
+            const analyses = [];
+            const add = (...args) => analyses.push(makeAnalysis(...args));
+
+            function countyFor(place) {
+                return place?.county || place?.state || place?.district || place?.country || "Ungeocoded";
+            }
+
+            function countryFor(place) {
+                return place?.country || "Ungeocoded";
+            }
+
+            function distanceBandFor(place) {
+                return place?.homeDistanceBand || "Unknown";
+            }
+
+            function isNorfolk(place) {
+                return /norfolk/i.test([place?.county, place?.state, place?.district, place?.adminDisplayName].join(" "));
+            }
+
+            function visitAggregates(groupFn) {
+                const grouped = new Map();
+                ctxVisits.forEach(visit => {
+                    const place = placesById.get(visit.placeId);
+                    if (!place) return;
+                    const key = groupFn(visit, place);
+                    if (!key) return;
+                    if (!grouped.has(key)) grouped.set(key, {
+                        label: key,
+                        hours: 0,
+                        visits: 0,
+                        longest: 0,
+                        dates: new Set(),
+                        places: new Set(),
+                    });
+                    const row = grouped.get(key);
+                    const hours = Number(visit.durationHours || 0);
+                    row.hours += hours;
+                    row.visits += 1;
+                    row.longest = Math.max(row.longest, hours);
+                    row.dates.add(visit.startLocalDate || dateFromIso(visit.startUtc));
+                    row.places.add(place.id);
+                    setRowLocation(row, place);
+                });
+                return Array.from(grouped.values());
+            }
+
+            function nightAggregates(groupFn) {
+                const grouped = new Map();
+                ctxNights.forEach(night => {
+                    const place = placesById.get(night.placeId);
+                    if (!place) return;
+                    const key = groupFn(night, place);
+                    if (!key) return;
+                    if (!grouped.has(key)) grouped.set(key, {
+                        label: key,
+                        nights: 0,
+                        awayNights: 0,
+                        places: new Set(),
+                        dates: new Set(),
+                    });
+                    const row = grouped.get(key);
+                    row.nights += 1;
+                    if (!night.isHome) row.awayNights += 1;
+                    row.places.add(place.id);
+                    row.dates.add(night.nightDate);
+                    setRowLocation(row, place);
+                });
+                return Array.from(grouped.values());
+            }
+
+            function activityAggregates(groupFn) {
+                const grouped = new Map();
+                ctxActivities.forEach(activity => {
+                    const activityPlace = activityPlacesById.get(activity.activityPlaceId);
+                    const key = groupFn(activity, activityPlace);
+                    if (!key) return;
+                    if (!grouped.has(key)) grouped.set(key, {
+                        label: key,
+                        events: 0,
+                        dates: new Set(),
+                        lat: activityPlace?.lat ?? activity.lat,
+                        lng: activityPlace?.lng ?? activity.lng,
+                        isHome: activityPlace?.isHome ?? activity.isHome,
+                        isWork: activityPlace?.isWork ?? false,
+                    });
+                    const row = grouped.get(key);
+                    row.events += 1;
+                    if (activity.localDate) row.dates.add(activity.localDate);
+                });
+                return Array.from(grouped.values());
+            }
+
+            function placeRows(valueFn, detailFn, places = ctxPlaces) {
+                return places.map(place => analysisRow(
+                    place.label,
+                    valueFn(place),
+                    detailFn(place),
+                    { placeId: place.id, lat: place.lat, lng: place.lng, isHome: place.isHome, isWork: place.isWork }
+                ));
+            }
+
+            function visitRows(grouped, metric) {
+                return grouped.map(row => {
+                    const avg = row.visits ? row.hours / row.visits : 0;
+                    const value = metric === "visits" ? row.visits
+                        : metric === "average" ? avg
+                        : metric === "longest" ? row.longest
+                        : metric === "dates" ? row.dates.size
+                        : metric === "places" ? row.places.size
+                        : row.hours;
+                    return analysisRow(
+                        row.label,
+                        value,
+                        `${formatNumber(row.visits)} visits · ${formatHours(row.hours)} · ${formatNumber(row.dates.size)} dates`,
+                        row
+                    );
+                });
+            }
+
+            function nightRows(grouped, metric = "awayNights") {
+                return grouped.map(row => {
+                    const value = metric === "places" ? row.places.size : metric === "nights" ? row.nights : row.awayNights;
+                    return analysisRow(
+                        row.label,
+                        value,
+                        `${formatNumber(row.awayNights)} away · ${formatNumber(row.nights)} known · ${formatNumber(row.places.size)} places`,
+                        row
+                    );
+                });
+            }
+
+            function activityRows(grouped, metric = "events") {
+                return grouped.map(row => analysisRow(
+                    row.label,
+                    metric === "dates" ? row.dates.size : row.events,
+                    `${formatNumber(row.events)} events · ${formatNumber(row.dates.size)} dates`,
+                    row
+                ));
+            }
+
+            function byThresholdRows(thresholdMiles, metric, beyond = false) {
+                const grouped = new Map();
+                ctxVisits.forEach(visit => {
+                    const place = placesById.get(visit.placeId);
+                    if (!place || place.distanceFromHomeMiles === null || place.distanceFromHomeMiles === undefined) return;
+                    const inRange = Number(place.distanceFromHomeMiles) <= thresholdMiles;
+                    if (beyond ? inRange : !inRange) return;
+                    const year = visit.startUtc.slice(0, 4);
+                    if (!grouped.has(year)) grouped.set(year, { label: year, hours: 0, visits: 0, dates: new Set(), places: new Set() });
+                    const row = grouped.get(year);
+                    row.hours += Number(visit.durationHours || 0);
+                    row.visits += 1;
+                    row.dates.add(visit.startLocalDate || dateFromIso(visit.startUtc));
+                    row.places.add(place.id);
+                    setRowLocation(row, place);
+                });
+                return Array.from(grouped.values()).map(row => {
+                    const value = metric === "hours" ? row.hours : metric === "visits" ? row.visits : row.dates.size;
+                    return analysisRow(row.label, value, `${formatHours(row.hours)} · ${formatNumber(row.visits)} visits · ${formatNumber(row.places.size)} places`, row);
+                });
+            }
+
+            function nightThresholdRows(thresholdMiles, beyond = false) {
+                const grouped = new Map();
+                ctxNights.forEach(night => {
+                    const place = placesById.get(night.placeId);
+                    if (!place || place.distanceFromHomeMiles === null || place.distanceFromHomeMiles === undefined) return;
+                    const inRange = Number(place.distanceFromHomeMiles) <= thresholdMiles;
+                    if (beyond ? inRange : !inRange) return;
+                    const year = String(night.year);
+                    if (!grouped.has(year)) grouped.set(year, { label: year, nights: 0, places: new Set() });
+                    const row = grouped.get(year);
+                    if (!night.isHome) row.nights += 1;
+                    row.places.add(place.id);
+                    setRowLocation(row, place);
+                });
+                return Array.from(grouped.values()).map(row => analysisRow(row.label, row.nights, `${formatNumber(row.places.size)} places`, row));
+            }
+
+            const visitsByYear = visitAggregates(visit => visit.startUtc.slice(0, 4));
+            const visitsByMonth = visitAggregates(visit => visit.startUtc.slice(0, 7));
+            const visitsByCounty = visitAggregates((visit, place) => countyFor(place));
+            const visitsByCountry = visitAggregates((visit, place) => countryFor(place));
+            const visitsByDistance = visitAggregates((visit, place) => distanceBandFor(place));
+            const visitsByDay = visitAggregates(visit => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(visit.startUtc).getDay()]);
+            const visitsByWeekend = visitAggregates(visit => {
+                const day = new Date(visit.startUtc).getDay();
+                return day === 0 || day === 6 ? "Weekend" : "Weekday";
+            });
+            const visitsByHour = visitAggregates(visit => `${String(new Date(visit.startUtc).getHours()).padStart(2, "0")}:00`);
+            const visitsByDuration = visitAggregates(visit => {
+                const hours = Number(visit.durationHours || 0);
+                if (hours < 0.5) return "<30 min";
+                if (hours < 1) return "30-60 min";
+                if (hours < 2) return "1-2h";
+                if (hours < 4) return "2-4h";
+                if (hours < 8) return "4-8h";
+                if (hours < 24) return "8-24h";
+                return "24h+";
+            });
+            const nightsByYear = nightAggregates(night => String(night.year));
+            const nightsByMonth = nightAggregates(night => night.nightDate.slice(0, 7));
+            const nightsByCounty = nightAggregates((night, place) => countyFor(place));
+            const nightsByCountry = nightAggregates((night, place) => countryFor(place));
+            const nightsByDistance = nightAggregates((night, place) => distanceBandFor(place));
+            const activityByYear = activityAggregates(activity => String(activity.year || "").slice(0, 4));
+            const activityByMonth = activityAggregates(activity => activity.localDate ? activity.localDate.slice(0, 7) : "");
+            const activityByKind = activityAggregates(activity => activity.activityKind || "maps_activity");
+
+            add("visit-hours-year", "Visit hours by year", "Time trends", "Total Timeline visit duration per year.", "hours", visitRows(visitsByYear, "hours"), "line", true);
+            add("visits-year", "Visit count by year", "Time trends", "How often the Timeline says you stopped somewhere.", "visits", visitRows(visitsByYear, "visits"), "line", true);
+            add("avg-visit-year", "Average visit length by year", "Time trends", "Mean duration of recorded visits in each year.", "hours", visitRows(visitsByYear, "average"), "line", true);
+            add("longest-visit-year", "Longest visit by year", "Time trends", "The longest single visit found in each year.", "hours", visitRows(visitsByYear, "longest"), "line", true);
+            add("active-dates-year", "Active visit dates by year", "Time trends", "Distinct dates with at least one recorded visit.", "days", visitRows(visitsByYear, "dates"), "line", true);
+            add("away-nights-year", "Away nights by year", "Overnights", "Nights not classified as home.", "nights", nightRows(nightsByYear, "awayNights"), "line", true);
+            add("home-nights-year", "Home nights by year", "Overnights", "Known nights classified as home.", "nights", nightRows(nightsByYear, "nights").map(row => analysisRow(row.label, (data.yearSummary.find(item => String(item.year) === row.label)?.homeNights || 0), row.detail, row)), "line", true);
+            add("away-places-year", "Away overnight places by year", "Overnights", "How many different non-home places were overnight locations.", "places", (data.yearSummary || []).map(row => analysisRow(String(row.year), row.awayPlaces, `${formatNumber(row.awayNights)} away nights`)), "line", true);
+            add("map-activity-year", "Maps activity by year", "Maps activity", "Searches, directions, navigation, and viewed places.", "events", activityRows(activityByYear), "line", true);
+            add("map-active-days-year", "Maps activity days by year", "Maps activity", "Distinct days with Maps activity.", "days", activityRows(activityByYear, "dates"), "line", true);
+            add("visit-hours-month", "Visit hours by month", "Time trends", "Monthly duration trend across all filtered places.", "hours", visitRows(visitsByMonth, "hours"), "line", true);
+            add("visits-month", "Visits by month", "Time trends", "Monthly stop count trend.", "visits", visitRows(visitsByMonth, "visits"), "line", true);
+            add("away-nights-month", "Away nights by month", "Overnights", "Monthly away overnight trend.", "nights", nightRows(nightsByMonth, "awayNights"), "line", true);
+            add("map-activity-month", "Maps activity by month", "Maps activity", "Monthly Maps activity trend.", "events", activityRows(activityByMonth), "line", true);
+            add("active-months", "Busiest months by active dates", "Time trends", "Months ranked by distinct dates with visits.", "days", visitRows(visitsByMonth, "dates"));
+
+            add("county-visit-hours", "Visit hours by county", "Counties", "County-level time spent, using reverse-geocoded place metadata.", "hours", visitRows(visitsByCounty, "hours"));
+            add("county-visits", "Visits by county", "Counties", "County-level visit count.", "visits", visitRows(visitsByCounty, "visits"));
+            add("county-average-visit", "Average visit length by county", "Counties", "Mean visit duration for each county.", "hours", visitRows(visitsByCounty, "average"));
+            add("county-longest-visit", "Longest visit by county", "Counties", "Longest individual visit recorded in each county.", "hours", visitRows(visitsByCounty, "longest"));
+            add("county-away-nights", "Away nights by county", "Counties", "County-level away overnight count.", "nights", nightRows(nightsByCounty, "awayNights"));
+            add("county-active-dates", "Active dates by county", "Counties", "Distinct dates with visits in each county.", "days", visitRows(visitsByCounty, "dates"));
+            add("county-count-year", "Counties visited by year", "Counties", "Distinct counties with at least one visit in each year.", "counties", (() => {
+                const byYear = new Map();
+                ctxVisits.forEach(visit => {
+                    const place = placesById.get(visit.placeId);
+                    if (!place) return;
+                    const year = visit.startUtc.slice(0, 4);
+                    if (!byYear.has(year)) byYear.set(year, new Set());
+                    byYear.get(year).add(countyFor(place));
+                });
+                return Array.from(byYear.entries()).map(([year, counties]) => analysisRow(year, counties.size, Array.from(counties).slice(0, 4).join(", ")));
+            })(), "line", true);
+            add("country-visit-hours", "Visit hours by country", "Counties", "Country-level time spent.", "hours", visitRows(visitsByCountry, "hours"));
+            add("country-away-nights", "Away nights by country", "Counties", "Country-level away overnight count.", "nights", nightRows(nightsByCountry, "awayNights"));
+
+            add("distance-hours", "Visit hours by home distance band", "Distance from home", "Time spent by distance from home.", "hours", visitRows(visitsByDistance, "hours"));
+            add("distance-visits", "Visits by home distance band", "Distance from home", "Stop count by distance from home.", "visits", visitRows(visitsByDistance, "visits"));
+            add("distance-active-dates", "Active dates by home distance band", "Distance from home", "Distinct visit dates by distance band.", "days", visitRows(visitsByDistance, "dates"));
+            add("distance-away-nights", "Away nights by home distance band", "Distance from home", "Away overnight count by distance from home.", "nights", nightRows(nightsByDistance, "awayNights"));
+            [1, 5, 10, 25].forEach(miles => {
+                add(`within-${miles}-mi-days`, `Days with visits within ${miles} mile${miles === 1 ? "" : "s"} of home`, "Distance from home", "Distinct days where at least one visit was inside this home radius.", "days", byThresholdRows(miles, "days"), "line", true);
+            });
+            [50, 100].forEach(miles => {
+                add(`beyond-${miles}-mi-hours`, `Visit hours beyond ${miles} miles from home`, "Distance from home", "Time spent outside this home radius.", "hours", byThresholdRows(miles, "hours", true), "line", true);
+                add(`beyond-${miles}-mi-nights`, `Away nights beyond ${miles} miles from home`, "Distance from home", "Away nights outside this home radius.", "nights", nightThresholdRows(miles, true), "line", true);
+            });
+
+            add("top-place-hours", "Top places by visit hours", "Places", "Places where the combined Timeline visit duration is highest.", "hours", placeRows(place => analysisForPlace(place.id)?.totalVisitHours || 0, place => `${formatNumber(place.visitCount)} visits · ${formatNumber(place.awayOvernightCount)} away nights`));
+            add("top-place-visits", "Top places by visit count", "Places", "Most frequently visited places.", "visits", placeRows(place => place.visitCount, place => `${formatHours(place.totalVisitHours)} · ${formatNumber(place.awayOvernightCount)} away nights`));
+            add("top-place-average", "Top places by average visit length", "Places", "Places with the longest mean visit duration.", "hours", placeRows(place => analysisForPlace(place.id)?.averageVisitHours || 0, place => `${formatNumber(place.visitCount)} visits`));
+            add("top-place-longest", "Top places by longest visit", "Places", "Places ranked by their longest single visit.", "hours", placeRows(place => Number(analysisForPlace(place.id)?.longestVisit?.durationHours || 0), place => `${formatNumber(place.visitCount)} visits`));
+            add("top-place-dates", "Top places by active dates", "Places", "Places appearing on the most distinct dates.", "days", placeRows(place => analysisForPlace(place.id)?.activeDateCount || 0, place => `${formatHours(place.totalVisitHours)} · ${formatNumber(place.visitCount)} visits`));
+            add("top-place-nights", "Top places by away nights", "Places", "Non-home overnight locations ranked by nights.", "nights", placeRows(place => place.awayOvernightCount, place => `${formatNumber(place.overnightCount)} known nights`));
+            add("recurring-place-years", "Most recurring places by active years", "Places", "Places that show up across the widest span of years.", "years", placeRows(place => analysisForPlace(place.id)?.years.length || 0, place => `${place.firstSeen || ""} to ${place.lastSeen || ""}`));
+            add("new-places-year", "New places first seen by year", "Places", "Count of place clusters whose first observed date falls in each year.", "places", (() => {
+                const grouped = new Map();
+                ctxPlaces.forEach(place => {
+                    const year = (place.firstSeen || "").slice(0, 4);
+                    if (!year) return;
+                    grouped.set(year, (grouped.get(year) || 0) + 1);
+                });
+                return Array.from(grouped.entries()).map(([year, count]) => analysisRow(year, count));
+            })(), "line", true);
+            add("last-seen-places-year", "Places last seen by year", "Places", "Place clusters whose last observed date falls in each year.", "places", (() => {
+                const grouped = new Map();
+                ctxPlaces.forEach(place => {
+                    const year = (place.lastSeen || "").slice(0, 4);
+                    if (!year) return;
+                    grouped.set(year, (grouped.get(year) || 0) + 1);
+                });
+                return Array.from(grouped.entries()).map(([year, count]) => analysisRow(year, count));
+            })(), "line", true);
+
+            add("weekday-hours", "Visit hours by day of week", "Routines", "Duration by weekday/weekend pattern.", "hours", visitRows(visitsByDay, "hours"));
+            add("weekday-visits", "Visits by day of week", "Routines", "Visit frequency by day of week.", "visits", visitRows(visitsByDay, "visits"));
+            add("weekend-hours", "Weekend vs weekday visit hours", "Routines", "Split of duration between weekdays and weekends.", "hours", visitRows(visitsByWeekend, "hours"));
+            add("start-hour-visits", "Visits by local start hour", "Routines", "Hour of day when visits start in the browser's local timezone.", "visits", visitRows(visitsByHour, "visits"));
+            add("duration-bands", "Visit duration bands", "Routines", "Distribution of short, medium, and long visits.", "visits", visitRows(visitsByDuration, "visits"));
+
+            add("activity-kind", "Maps activity by kind", "Maps activity", "Directions, navigation, searches, viewed places, and other Maps records.", "events", activityRows(activityByKind));
+            add("activity-place-top", "Top Maps activity places", "Maps activity", "Places with the most Maps activity records.", "events", ctxActivityPlaces.map(place => analysisRow(place.label, place.activityCount, `${formatNumber(place.searchCount)} searches · ${formatNumber((place.directionsCount || 0) + (place.navigationCount || 0))} directions`, { lat: place.lat, lng: place.lng, isHome: place.isHome, isWork: place.isWork })));
+            add("source-unique-records", "Source files by unique Maps activity", "Data quality", "Which Takeout files contributed unique Maps activity records.", "events", sourceCoverage.map(source => analysisRow(basename(source.sourceFile), source.uniqueRecordsAdded, `${formatNumber(source.rawRecords)} raw · ${formatNumber(source.duplicateRecords)} duplicates`)));
+            add("source-duplicates", "Source files by duplicate Maps activity", "Data quality", "Where duplicate Maps activity records came from.", "events", sourceCoverage.map(source => analysisRow(basename(source.sourceFile), source.duplicateRecords, `${formatNumber(source.rawRecords)} raw · ${formatNumber(source.uniqueRecordsAdded)} unique`)));
+            add("osm-confidence", "Place-label geocode confidence", "Data quality", "How many place clusters received high, medium, low, or no OSM label match.", "places", (() => {
+                const grouped = new Map();
+                ctxPlaces.forEach(place => {
+                    const key = place.geocodeConfidence || (genericLabel(place.label) ? "generic/unmatched" : "already named");
+                    grouped.set(key, (grouped.get(key) || 0) + 1);
+                });
+                return Array.from(grouped.entries()).map(([label, count]) => analysisRow(label, count));
+            })());
+            add("admin-county-coverage", "Reverse-geocoded places by county", "Data quality", "County metadata coverage from the admin geocode cache.", "places", (() => {
+                const grouped = new Map();
+                ctxPlaces.forEach(place => {
+                    const key = countyFor(place);
+                    grouped.set(key, (grouped.get(key) || 0) + 1);
+                });
+                return Array.from(grouped.entries()).map(([label, count]) => analysisRow(label, count));
+            })());
+            add("generic-labels-county", "Generic coordinate labels by county", "Data quality", "Remaining coordinate-style labels grouped by county.", "places", (() => {
+                const grouped = new Map();
+                ctxPlaces.filter(place => genericLabel(place.label)).forEach(place => {
+                    const key = countyFor(place);
+                    grouped.set(key, (grouped.get(key) || 0) + 1);
+                });
+                return Array.from(grouped.entries()).map(([label, count]) => analysisRow(label, count));
+            })());
+
+            const norfolkPlaces = ctxPlaces.filter(isNorfolk);
+            const norfolkIds = new Set(norfolkPlaces.map(place => place.id));
+            const norfolkNights = ctxNights.filter(night => norfolkIds.has(night.placeId));
+            add("norfolk-hours-year", "Norfolk visit hours by year", "Norfolk", "Time spent in places reverse-geocoded to Norfolk.", "hours", visitRows(visitAggregates((visit, place) => norfolkIds.has(place.id) ? visit.startUtc.slice(0, 4) : ""), "hours"), "line", true);
+            add("norfolk-visits-year", "Norfolk visits by year", "Norfolk", "Visit count for Norfolk places.", "visits", visitRows(visitAggregates((visit, place) => norfolkIds.has(place.id) ? visit.startUtc.slice(0, 4) : ""), "visits"), "line", true);
+            add("norfolk-away-nights-year", "Norfolk away nights by year", "Norfolk", "Away overnight count for Norfolk places.", "nights", (() => {
+                const grouped = new Map();
+                norfolkNights.forEach(night => {
+                    const year = String(night.year);
+                    grouped.set(year, (grouped.get(year) || 0) + (night.isHome ? 0 : 1));
+                });
+                return Array.from(grouped.entries()).map(([year, count]) => analysisRow(year, count));
+            })(), "line", true);
+            add("norfolk-top-hours", "Top Norfolk places by visit hours", "Norfolk", "Norfolk places ranked by total visit duration.", "hours", placeRows(place => analysisForPlace(place.id)?.totalVisitHours || 0, place => `${formatNumber(place.visitCount)} visits · ${formatNumber(place.awayOvernightCount)} away nights`, norfolkPlaces));
+            add("norfolk-top-nights", "Top Norfolk places by away nights", "Norfolk", "Norfolk places ranked by away overnight count.", "nights", placeRows(place => place.awayOvernightCount, place => `${formatHours(place.totalVisitHours)} · ${formatNumber(place.visitCount)} visits`, norfolkPlaces));
+
+            return analyses;
+        }
+
+        function clippedLabel(value, length = 22) {
+            const text = String(value || "");
+            return text.length > length ? `${text.slice(0, length - 3)}...` : text;
+        }
+
+        function analysisChartSvg(analysis) {
+            const rows = (analysis.trend ? analysis.rows.slice(-14) : analysis.rows.slice(0, 7)).filter(row => Number.isFinite(row.value));
+            if (!rows.length) return `<svg class="analysis-chart" viewBox="0 0 300 92" role="img"><text x="0" y="48">No matching rows</text></svg>`;
+            if (analysis.chart === "line" && rows.length > 1) {
+                const values = rows.map(row => row.value);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const range = Math.max(1, max - min);
+                const points = rows.map((row, index) => {
+                    const x = 8 + (index * 284 / Math.max(1, rows.length - 1));
+                    const y = 70 - ((row.value - min) * 54 / range);
+                    return [x, y];
+                });
+                return `
+                    <svg class="analysis-chart" viewBox="0 0 300 92" role="img">
+                        <polyline class="line" points="${points.map(point => point.join(",")).join(" ")}"></polyline>
+                        ${points.map(point => `<circle class="dot" cx="${point[0]}" cy="${point[1]}" r="2.5"></circle>`).join("")}
+                        <text x="0" y="88">${escapeHtml(clippedLabel(rows[0].label, 14))}</text>
+                        <text x="248" y="88">${escapeHtml(clippedLabel(rows[rows.length - 1].label, 14))}</text>
+                    </svg>
+                `;
+            }
+            const max = Math.max(...rows.map(row => row.value), 1);
+            return `
+                <svg class="analysis-chart" viewBox="0 0 300 92" role="img">
+                    ${rows.map((row, index) => {
+                        const y = 4 + index * 12;
+                        const width = Math.max(2, row.value / max * 158);
+                        return `
+                            <text x="0" y="${y + 9}">${escapeHtml(clippedLabel(row.label, 18))}</text>
+                            <rect class="bar" x="114" y="${y}" width="${width}" height="9" rx="2"></rect>
+                            <text x="${Math.min(282, 120 + width)}" y="${y + 8}">${escapeHtml(analysisMetric(row.value, analysis.unit))}</text>
+                        `;
+                    }).join("")}
+                </svg>
+            `;
+        }
+
+        function analysisRowAttributes(row) {
+            const bits = [];
+            if (row.placeId) bits.push(`data-place-id="${escapeHtml(row.placeId)}"`);
+            if (Number.isFinite(row.lat) && Number.isFinite(row.lng)) bits.push(`data-lat="${row.lat}" data-lng="${row.lng}"`);
+            return bits.join(" ");
+        }
+
+        function analysisCardHtml(analysis) {
+            const rows = (analysis.trend ? analysis.rows.slice(-6).reverse() : analysis.rows.slice(0, 6));
+            return `
+                <article class="analysis-card ${analysis.id === state.selectedAnalysisId ? "selected" : ""}" data-analysis-id="${escapeHtml(analysis.id)}">
+                    <h3>${escapeHtml(analysis.title)}</h3>
+                    <div class="analysis-meta">${escapeHtml(analysis.summary)}</div>
+                    <div class="analysis-value"><strong>${escapeHtml(analysisMetric(analysis.metricValue, analysis.unit))}</strong><span>${escapeHtml(analysis.category)}</span></div>
+                    ${analysisChartSvg(analysis)}
+                    <table class="analysis-mini-table">
+                        <tbody>${rows.map(row => `
+                            <tr ${analysisRowAttributes(row)}>
+                                <td><div class="place-name">${escapeHtml(row.label)}</div><div class="subtle">${escapeHtml(row.detail || "")}</div></td>
+                                <td>${escapeHtml(analysisMetric(row.value, analysis.unit))}</td>
+                            </tr>
+                        `).join("")}</tbody>
+                    </table>
+                </article>
+            `;
+        }
+
+        function markerRowsForAnalysis(analysis) {
+            return analysis.rows.slice(0, 300).map(row => {
+                if (row.placeId && placesById.has(row.placeId)) return placesById.get(row.placeId);
+                if (Number.isFinite(row.lat) && Number.isFinite(row.lng)) {
+                    return {
+                        label: row.label,
+                        lat: row.lat,
+                        lng: row.lng,
+                        isHome: Boolean(row.isHome),
+                        isWork: Boolean(row.isWork),
+                        visitCount: row.value,
+                    };
+                }
+                return null;
+            }).filter(Boolean);
+        }
+
+        function renderAnalysisDashboard() {
+            const board = document.getElementById("analysisBoard");
+            const analyses = buildAnalysisCatalog();
+            const categories = ["all", ...Array.from(new Set(analyses.map(analysis => analysis.category))).sort()];
+            if (!categories.includes(state.analysisCategory)) state.analysisCategory = "all";
+            const visible = analyses.filter(analysis => state.analysisCategory === "all" || analysis.category === state.analysisCategory);
+            if (!visible.some(analysis => analysis.id === state.selectedAnalysisId)) {
+                state.selectedAnalysisId = visible[0]?.id || "";
+            }
+            const selected = visible.find(analysis => analysis.id === state.selectedAnalysisId) || visible[0];
+            board.innerHTML = `
+                <div class="analysis-toolbar">
+                    <div>
+                        <h2>${formatNumber(visible.length)} analyses</h2>
+                        <div class="subtle">${state.year === "all" ? "All years" : state.year} · ${state.includeHome ? "home included" : "home hidden"} · ${state.includeAway ? "away included" : "away hidden"}</div>
+                    </div>
+                    <select id="analysisCategorySelect" aria-label="Analysis category">
+                        ${categories.map(category => `<option value="${escapeHtml(category)}" ${category === state.analysisCategory ? "selected" : ""}>${category === "all" ? "All categories" : escapeHtml(category)}</option>`).join("")}
+                    </select>
+                </div>
+                <div class="analysis-grid">${visible.map(analysisCardHtml).join("")}</div>
+            `;
+            document.getElementById("analysisCategorySelect").addEventListener("change", event => {
+                state.analysisCategory = event.target.value;
+                state.selectedAnalysisId = "";
+                render();
+            });
+            board.querySelectorAll(".analysis-card").forEach(card => {
+                card.addEventListener("click", event => {
+                    if (event.target.closest("tr")) return;
+                    state.selectedAnalysisId = card.dataset.analysisId;
+                    render();
+                });
+            });
+            board.querySelectorAll("tr[data-lat]").forEach(row => {
+                row.addEventListener("click", event => {
+                    event.stopPropagation();
+                    const lat = Number(row.dataset.lat);
+                    const lng = Number(row.dataset.lng);
+                    if (row.dataset.placeId) selectPlace(row.dataset.placeId);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) state.map.setView([lat, lng], 12);
+                });
+            });
+            const markerRows = selected ? markerRowsForAnalysis(selected) : [];
+            renderMarkers(markerRows.length ? markerRows : filterPlaces().slice(0, 300), "places");
+        }
+
+        function selectPlace(placeId) {
+            if (!placesById.has(placeId)) return;
+            state.selectedPlaceId = placeId;
+            renderSelectedPlace();
+            document.querySelectorAll("tr[data-place-id]").forEach(row => {
+                row.classList.toggle("selected", row.dataset.placeId === placeId);
+            });
+        }
+
+        function renderSelectedPlace() {
+            const panel = document.getElementById("detailPanel");
+            const analysis = state.selectedPlaceId ? analysisForPlace(state.selectedPlaceId) : null;
+            if (!analysis) {
+                panel.classList.remove("visible");
+                panel.innerHTML = "";
+                return;
+            }
+            const { place, visits, nights, activities, years, dates, longestVisit } = analysis;
+            const topYears = years.slice(0, 20);
+            panel.classList.add("visible");
+            panel.innerHTML = `
+                <div class="detail-header">
+                    <div>
+                        <div class="detail-title">${escapeHtml(place.label)}</div>
+                        <div class="subtle">${place.lat}, ${place.lng}${adminSummary(place) ? ` · ${escapeHtml(adminSummary(place))}` : ""}${homeDistanceText(place) ? ` · ${homeDistanceText(place)} from home` : ""}${place.geocodeSource ? ` · OSM ${escapeHtml(place.geocodeConfidence)} ${place.geocodeDistanceM}m` : ""}${place.originalLabel ? ` · ${escapeHtml(place.originalLabel)}` : ""}</div>
+                    </div>
+                    <button class="icon-button" id="detailClose" type="button" aria-label="Close selected place">×</button>
+                </div>
+                <div class="detail-metrics">
+                    <div class="detail-metric"><span>Visit hours</span><strong>${formatCompactHours(analysis.totalVisitHours)}</strong></div>
+                    <div class="detail-metric"><span>Visits</span><strong>${formatNumber(visits.length)}</strong></div>
+                    <div class="detail-metric"><span>Avg visit</span><strong>${formatCompactHours(analysis.averageVisitHours)}h</strong></div>
+                    <div class="detail-metric"><span>Longest visit</span><strong>${longestVisit ? formatHours(longestVisit.durationHours) : "0h"}</strong></div>
+                    <div class="detail-metric"><span>Nights</span><strong>${formatNumber(nights.length)}</strong></div>
+                    <div class="detail-metric"><span>Active dates</span><strong>${formatNumber(analysis.activeDateCount)}</strong></div>
+                </div>
+                <div class="detail-sections">
+                    <div class="detail-section">
+                        <h2>Years</h2>
+                        <div class="mini-scroll">
+                            <table class="mini-table">
+                                <thead><tr><th>Year</th><th class="num">Hours</th><th class="num">Visits</th><th class="num">Nights</th><th class="num">Dates</th></tr></thead>
+                                <tbody>${topYears.map(row => `
+                                    <tr><td>${row.year}</td><td class="num">${formatCompactHours(row.visitHours)}</td><td class="num">${formatNumber(row.visitCount)}</td><td class="num">${formatNumber(row.overnightCount)}</td><td class="num">${formatNumber(row.activeDateCount)}</td></tr>
+                                `).join("")}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <h2>Dates</h2>
+                        <div class="mini-scroll">
+                            <table class="mini-table">
+                                <thead><tr><th>Date</th><th class="num">Hours</th><th class="num">Visits</th><th class="num">Nights</th><th class="num">Activity</th></tr></thead>
+                                <tbody>${dates.map(row => `
+                                    <tr><td>${row.date}</td><td class="num">${formatCompactHours(row.visitHours)}</td><td class="num">${formatNumber(row.visitCount)}</td><td class="num">${formatNumber(row.overnightCount)}</td><td class="num">${formatNumber(row.activityCount)}</td></tr>
+                                `).join("")}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <h2>Visits</h2>
+                        <div class="mini-scroll">
+                            <table class="mini-table">
+                                <thead><tr><th>Start</th><th>End</th><th class="num">Hours</th><th class="num">Prob.</th></tr></thead>
+                                <tbody>${visits.map(visit => `
+                                    <tr><td>${visit.startUtc.replace("T", " ").replace("Z", "")}</td><td>${visit.endUtc.replace("T", " ").replace("Z", "")}</td><td class="num">${formatCompactHours(visit.durationHours)}</td><td class="num">${visit.probability}</td></tr>
+                                `).join("")}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <h2>Activity</h2>
+                        <div class="mini-scroll">
+                            <table class="mini-table">
+                                <thead><tr><th>Time</th><th>Kind</th><th>Title</th></tr></thead>
+                                <tbody>${activities.map(activity => `
+                                    <tr><td>${activity.timeUtc ? activity.timeUtc.replace("T", " ").replace("Z", "") : ""}</td><td>${escapeHtml(activity.activityKind)}</td><td>${escapeHtml(activity.title || activity.locationName)}</td></tr>
+                                `).join("")}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.getElementById("detailClose").addEventListener("click", () => {
+                state.selectedPlaceId = null;
+                renderSelectedPlace();
+                document.querySelectorAll("tr.selected").forEach(row => row.classList.remove("selected"));
+            });
+        }
+
+        function includeByHomeAway(item) {
+            const isHome = Boolean(item.isHome);
+            if (isHome && !state.includeHome) return false;
+            if (!isHome && !state.includeAway) return false;
+            return true;
+        }
+
+        function matchesSearch(item) {
+            if (!state.search) return true;
+            const place = item.placeId ? placesById.get(item.placeId) : item;
+            const activityPlace = item.activityPlaceId ? activityPlacesById.get(item.activityPlaceId) : item;
+            const haystack = [
+                item.label, item.placeLabel, item.semanticType, item.source,
+                place?.label, place?.semanticType, place?.examplePlaceId,
+                place?.originalLabel, place?.geocodeSource, place?.geocodeConfidence, place?.osmCategory,
+                place?.county, place?.country, place?.state, place?.district, place?.locality,
+                place?.postcode, place?.road, place?.homeDistanceBand, place?.adminDisplayName,
+                item.title, item.locationName, item.activityKind, item.description,
+                activityPlace?.label, item.sourceFile, item.member, item.status,
+                item.lat, item.lng
+            ].join(" ").toLowerCase();
+            return haystack.includes(state.search);
+        }
+
+        function filterPlaces() {
+            return data.places.filter(place => {
+                if (!includeByHomeAway(place) || !matchesSearch(place)) return false;
+                if (state.year === "all") return true;
+                const year = Number(state.year);
+                const hasVisit = data.visits.some(visit => visit.placeId === place.id && Number(visit.startUtc.slice(0, 4)) === year);
+                const hasNight = data.overnights.some(night => night.placeId === place.id && night.year === year);
+                return hasVisit || hasNight;
+            });
+        }
+
+        function filterOvernights() {
+            return data.overnights.filter(night => {
+                if (state.year !== "all" && String(night.year) !== state.year) return false;
+                return includeByHomeAway(night) && matchesSearch(night);
+            });
+        }
+
+        function filterVisits() {
+            return data.visits.filter(visit => {
+                if (state.year !== "all" && visit.startUtc.slice(0, 4) !== state.year) return false;
+                return includeByHomeAway(visit) && matchesSearch(visit);
+            });
+        }
+
+        function filterActivityPlaces() {
+            return activityPlaces.filter(place => {
+                if (!includeByHomeAway(place) || !matchesSearch(place)) return false;
+                if (state.year === "all") return true;
+                return mapActivities.some(activity => activity.activityPlaceId === place.id && String(activity.year) === state.year);
+            });
+        }
+
+        function filterActivities() {
+            return mapActivities.filter(activity => {
+                if (state.year !== "all" && String(activity.year) !== state.year) return false;
+                return includeByHomeAway(activity) && matchesSearch(activity);
+            });
+        }
+
+        function filterSources() {
+            return sourceCoverage.filter(source => matchesSearch(source));
+        }
+
+        function setMainMode(analysisMode) {
+            document.getElementById("analysisBoard").hidden = !analysisMode;
+            document.getElementById("dataTable").hidden = analysisMode;
+        }
+
+        function render() {
+            if (state.tab === "analysis") {
+                setMainMode(true);
+                renderAnalysisDashboard();
+                renderSelectedPlace();
+                return;
+            }
+            setMainMode(false);
+            if (state.tab === "places") renderPlaces();
+            if (state.tab === "duration") renderDuration();
+            if (state.tab === "placeYears") renderPlaceYears();
+            if (state.tab === "overnights") renderOvernights();
+            if (state.tab === "visits") renderVisits();
+            if (state.tab === "activityPlaces") renderActivityPlaces();
+            if (state.tab === "activities") renderActivities();
+            if (state.tab === "years") renderYears();
+            if (state.tab === "sources") renderSources();
+            renderSelectedPlace();
+        }
+
+        function renderPlaces() {
+            const rows = filterPlaces();
+            setHead(["Place", "County", "Home dist.", "Type", "Visits", "Visit hours", "Avg visit", "Active dates", "Away nights", "First", "Last"]);
+            setRows(rows.slice(0, 1000).map(place => `
+                <tr data-place-id="${escapeHtml(place.id)}" data-lat="${place.lat}" data-lng="${place.lng}" data-title="${escapeHtml(place.label)}">
+                    <td><div class="place-name">${escapeHtml(place.label)}</div><div class="subtle">${place.lat}, ${place.lng}${place.geocodeSource ? ` · OSM ${escapeHtml(place.geocodeConfidence)} ${place.geocodeDistanceM}m` : ""}</div></td>
+                    <td>${escapeHtml(place.county || place.country || "")}</td>
+                    <td>${escapeHtml(homeDistanceText(place))}</td>
+                    <td><span class="pill ${placeClass(place)}">${placeLabel(place)}</span></td>
+                    <td class="num">${formatNumber(place.visitCount)}</td>
+                    <td class="num">${formatHours(place.totalVisitHours)}</td>
+                    <td class="num">${formatHours(analysisForPlace(place.id)?.averageVisitHours || 0)}</td>
+                    <td class="num">${formatNumber(analysisForPlace(place.id)?.activeDateCount || 0)}</td>
+                    <td class="num">${formatNumber(place.awayOvernightCount)}</td>
+                    <td>${place.firstSeen || ""}</td>
+                    <td>${place.lastSeen || ""}</td>
+                </tr>
+            `));
+            renderMarkers(rows, "places");
+        }
+
+        function renderDuration() {
+            const rows = filterPlaces().slice().sort((a, b) => b.totalVisitHours - a.totalVisitHours || b.visitCount - a.visitCount || b.overnightCount - a.overnightCount);
+            setHead(["Place", "County", "Home dist.", "Type", "Visit hours", "Visits", "Avg visit", "Longest", "Active dates", "Nights", "First", "Last"]);
+            setRows(rows.slice(0, 1000).map(place => {
+                const analysis = analysisForPlace(place.id);
+                return `
+                    <tr data-place-id="${escapeHtml(place.id)}" data-lat="${place.lat}" data-lng="${place.lng}" data-title="${escapeHtml(place.label)}">
+                        <td><div class="place-name">${escapeHtml(place.label)}</div><div class="subtle">${place.geocodeSource ? `OSM ${escapeHtml(place.geocodeConfidence)} ${place.geocodeDistanceM}m` : `${place.lat}, ${place.lng}`}</div></td>
+                        <td>${escapeHtml(place.county || place.country || "")}</td>
+                        <td>${escapeHtml(homeDistanceText(place))}</td>
+                        <td><span class="pill ${placeClass(place)}">${placeLabel(place)}</span></td>
+                        <td class="num">${formatHours(analysis.totalVisitHours)}</td>
+                        <td class="num">${formatNumber(analysis.visits.length)}</td>
+                        <td class="num">${formatHours(analysis.averageVisitHours)}</td>
+                        <td class="num">${analysis.longestVisit ? formatHours(analysis.longestVisit.durationHours) : "0h"}</td>
+                        <td class="num">${formatNumber(analysis.activeDateCount)}</td>
+                        <td class="num">${formatNumber(analysis.nights.length)}</td>
+                        <td>${analysis.firstSeen || ""}</td>
+                        <td>${analysis.lastSeen || ""}</td>
+                    </tr>
+                `;
+            }));
+            renderMarkers(rows, "places");
+        }
+
+        function renderPlaceYears() {
+            const rows = placeYearRows().filter(row => {
+                const place = placesById.get(row.placeId);
+                if (!place || !includeByHomeAway(place) || !matchesSearch(place)) return false;
+                if (state.year !== "all" && String(row.year) !== state.year) return false;
+                return true;
+            });
+            setHead(["Year", "Place", "County", "Type", "Hours", "Visits", "Avg visit", "Nights", "Active dates", "Activity"]);
+            setRows(rows.slice(0, 1500).map(row => `
+                <tr data-place-id="${escapeHtml(row.placeId)}" data-lat="${row.lat}" data-lng="${row.lng}" data-title="${escapeHtml(row.placeLabel)}">
+                    <td>${row.year}</td>
+                    <td><div class="place-name">${escapeHtml(row.placeLabel)}</div><div class="subtle">${escapeHtml(row.semanticType || "")}</div></td>
+                    <td>${escapeHtml(placesById.get(row.placeId)?.county || placesById.get(row.placeId)?.country || "")}</td>
+                    <td><span class="pill ${placeClass(row)}">${placeLabel(row)}</span></td>
+                    <td class="num">${formatHours(row.visitHours)}</td>
+                    <td class="num">${formatNumber(row.visitCount)}</td>
+                    <td class="num">${formatHours(row.averageVisitHours)}</td>
+                    <td class="num">${formatNumber(row.overnightCount)}</td>
+                    <td class="num">${formatNumber(row.activeDateCount)}</td>
+                    <td class="num">${formatNumber(row.activityCount)}</td>
+                </tr>
+            `));
+            const markerPlaces = Array.from(new Map(rows.map(row => [row.placeId, placesById.get(row.placeId)])).values()).filter(Boolean);
+            renderMarkers(markerPlaces, "places");
+        }
+
+        function renderOvernights() {
+            const rows = filterOvernights();
+            setHead(["Night", "Place", "County", "Type", "Source", "Lat", "Lng"]);
+            setRows(rows.slice(0, 1500).map(night => `
+                <tr data-place-id="${escapeHtml(night.placeId)}" data-lat="${night.lat}" data-lng="${night.lng}" data-title="${escapeHtml(night.placeLabel)}">
+                    <td>${night.nightDate}</td>
+                    <td><div class="place-name">${escapeHtml(night.placeLabel)}</div></td>
+                    <td>${escapeHtml(placesById.get(night.placeId)?.county || placesById.get(night.placeId)?.country || "")}</td>
+                    <td><span class="pill ${placeClass(night)}">${placeLabel(night)}</span></td>
+                    <td>${escapeHtml(night.source)}</td>
+                    <td>${night.lat}</td>
+                    <td>${night.lng}</td>
+                </tr>
+            `));
+            renderMarkers(rows, "overnights");
+        }
+
+        function renderVisits() {
+            const rows = filterVisits();
+            setHead(["Start", "Place", "County", "Type", "Duration", "Visit prob.", "Lat", "Lng"]);
+            setRows(rows.slice(0, 1500).map(visit => `
+                <tr data-place-id="${escapeHtml(visit.placeId)}" data-lat="${visit.lat}" data-lng="${visit.lng}" data-title="${escapeHtml(visit.placeLabel)}">
+                    <td>${visit.startUtc.replace("T", " ").replace("Z", "")}</td>
+                    <td><div class="place-name">${escapeHtml(visit.placeLabel)}</div><div class="subtle">${escapeHtml(visit.semanticType)}${placesById.get(visit.placeId)?.geocodeSource ? ` · OSM ${escapeHtml(placesById.get(visit.placeId).geocodeConfidence)}` : ""}</div></td>
+                    <td>${escapeHtml(placesById.get(visit.placeId)?.county || placesById.get(visit.placeId)?.country || "")}</td>
+                    <td><span class="pill ${placeClass(visit)}">${placeLabel(visit)}</span></td>
+                    <td class="num">${formatHours(visit.durationHours)}</td>
+                    <td class="num">${visit.probability}</td>
+                    <td>${visit.lat}</td>
+                    <td>${visit.lng}</td>
+                </tr>
+            `));
+            renderMarkers(rows, "visits");
+        }
+
+        function renderActivityPlaces() {
+            const rows = filterActivityPlaces();
+            setHead(["Activity place", "Type", "Events", "Directions", "Searches", "Views", "First", "Last", "Sources"]);
+            setRows(rows.slice(0, 1500).map(place => `
+                <tr data-lat="${place.lat}" data-lng="${place.lng}" data-title="${escapeHtml(place.label)}">
+                    <td><div class="place-name">${escapeHtml(place.label)}</div><div class="subtle">${place.lat}, ${place.lng}</div></td>
+                    <td><span class="pill ${placeClass(place)}">${placeLabel(place)}</span></td>
+                    <td class="num">${formatNumber(place.activityCount)}</td>
+                    <td class="num">${formatNumber((place.directionsCount || 0) + (place.navigationCount || 0))}</td>
+                    <td class="num">${formatNumber(place.searchCount)}</td>
+                    <td class="num">${formatNumber(place.placeViewCount)}</td>
+                    <td>${place.firstSeen || ""}</td>
+                    <td>${place.lastSeen || ""}</td>
+                    <td class="num">${formatNumber(place.sourceCount)}</td>
+                </tr>
+            `));
+            renderMarkers(rows, "activityPlaces");
+        }
+
+        function renderActivities() {
+            const rows = filterActivities();
+            setHead(["Time", "Activity", "Place", "Type", "Sources", "Lat", "Lng"]);
+            setRows(rows.slice(0, 2000).map(activity => `
+                <tr ${activity.hasCoordinates ? `data-lat="${activity.lat}" data-lng="${activity.lng}"` : ""} data-title="${escapeHtml(activity.locationName || activity.title)}">
+                    <td>${activity.timeUtc ? activity.timeUtc.replace("T", " ").replace("Z", "") : ""}</td>
+                    <td><div class="place-name">${escapeHtml(activity.title)}</div><div class="subtle">${escapeHtml(activity.activityKind)}</div></td>
+                    <td><div class="place-name">${escapeHtml(activity.placeLabel || activity.locationName)}</div></td>
+                    <td><span class="pill ${placeClass(activity)}">${placeLabel(activity)}</span></td>
+                    <td class="num">${formatNumber(activity.sourceCount)}</td>
+                    <td>${activity.lat ?? ""}</td>
+                    <td>${activity.lng ?? ""}</td>
+                </tr>
+            `));
+            renderMarkers(rows, "activities");
+        }
+
+        function renderYears() {
+            setHead(["Year", "Known nights", "Away nights", "Home nights", "Away places", "Visits", "Map activity"]);
+            setRows(data.yearSummary.map(row => `
+                <tr>
+                    <td>${row.year}</td>
+                    <td class="num">${formatNumber(row.knownNights)}</td>
+                    <td class="num">${formatNumber(row.awayNights)}</td>
+                    <td class="num">${formatNumber(row.homeNights)}</td>
+                    <td class="num">${formatNumber(row.awayPlaces)}</td>
+                    <td class="num">${formatNumber(row.visitCount)}</td>
+                    <td class="num">${formatNumber(row.mapActivityCount)}</td>
+                </tr>
+            `));
+            renderMarkers(filterPlaces(), "years");
+        }
+
+        function renderSources() {
+            const rows = filterSources();
+            setHead(["Source", "Status", "Raw records", "Unique added", "Duplicates", "Mapped", "Date range"]);
+            setRows(rows.map(source => `
+                <tr>
+                    <td><div class="place-name">${escapeHtml(basename(source.sourceFile))}</div><div class="subtle">${escapeHtml(source.member || source.sourceFile)}</div></td>
+                    <td>${escapeHtml(source.status)}</td>
+                    <td class="num">${formatNumber(source.rawRecords)}</td>
+                    <td class="num">${formatNumber(source.uniqueRecordsAdded)}</td>
+                    <td class="num">${formatNumber(source.duplicateRecords)}</td>
+                    <td class="num">${formatNumber(source.mappedRecords)}</td>
+                    <td>${source.dateMin ? `${source.dateMin.slice(0, 10)} to ${source.dateMax.slice(0, 10)}` : ""}</td>
+                </tr>
+            `));
+            renderMarkers(filterActivityPlaces(), "sources");
+        }
+
+        function setHead(labels) {
+            document.getElementById("tableHead").innerHTML = `<tr>${labels.map(label => `<th>${label}</th>`).join("")}</tr>`;
+        }
+
+        function setRows(markup) {
+            const body = document.getElementById("tableBody");
+            body.innerHTML = markup.join("");
+            body.querySelectorAll("tr[data-lat]").forEach(row => {
+                row.classList.toggle("selected", row.dataset.placeId === state.selectedPlaceId);
+                row.addEventListener("click", () => {
+                    const lat = Number(row.dataset.lat);
+                    const lng = Number(row.dataset.lng);
+                    if (row.dataset.placeId) selectPlace(row.dataset.placeId);
+                    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+                    state.map.setView([lat, lng], 14);
+                });
+            });
+        }
+
+        function markerRadius(item, mode) {
+            if (mode === "places") return Math.max(5, Math.min(18, 5 + Math.sqrt((item.visitCount || 0) + (item.overnightCount || 0))));
+            if (mode === "activityPlaces") return Math.max(5, Math.min(18, 4 + Math.sqrt(item.activityCount || 0)));
+            if (mode === "activities") return Math.max(5, Math.min(12, 4 + Math.sqrt(item.activityCount || 1)));
+            return item.isHome ? 7 : 8;
+        }
+
+        function markerColor(item) {
+            if (item.isHome) return "#1f7a5c";
+            if (item.isWork) return "#2f6fbd";
+            if (item.activityKind === "directions" || item.activityKind === "navigation") return "#2f6fbd";
+            if (item.activityKind === "search") return "#b76619";
+            if ((item.activityCount || 0) > 0 || item.activityPlaceId) return "#347f83";
+            return item.awayOvernightCount || item.source?.includes("overnight") || item.nightDate ? "#b73535" : "#b76619";
+        }
+
+        function renderMarkers(items, mode) {
+            state.layer.clearLayers();
+            const markerItems = mode === "overnights" || mode === "visits" || mode === "activities" ? compactByPlace(items, mode) : items;
+            const bounds = [];
+            markerItems.slice(0, 1200).forEach(item => {
+                if (!Number.isFinite(item.lat) || !Number.isFinite(item.lng)) return;
+                const marker = L.circleMarker([item.lat, item.lng], {
+                    radius: markerRadius(item, mode),
+                    weight: 1,
+                    color: markerColor(item),
+                    fillColor: markerColor(item),
+                    fillOpacity: 0.72,
+                }).addTo(state.layer);
+                const markerPlaceId = item.id || item.placeId || item.confirmedPlaceId;
+                if (placesById.has(markerPlaceId)) {
+                    marker.on("click", () => selectPlace(markerPlaceId));
+                }
+                marker.bindPopup(`
+                    <div class="popup-title">${escapeHtml(item.label || item.placeLabel)}</div>
+                    <div>${item.isHome ? "Home" : item.isWork ? "Work" : "Away"}${item.visitCount !== undefined ? ` · ${formatNumber(item.visitCount)} visits` : ""}${item.activityCount !== undefined ? ` · ${formatNumber(item.activityCount)} activity` : ""}</div>
+                    <div>${item.overnightCount !== undefined ? `${formatNumber(item.overnightCount)} nights` : item.nightDate || item.startUtc || item.timeUtc || ""}</div>
+                    <div class="subtle">${item.lat}, ${item.lng}</div>
+                `);
+                bounds.push([item.lat, item.lng]);
+            });
+            document.getElementById("mapStatus").textContent = `${formatNumber(items.length)} rows, ${formatNumber(markerItems.length)} mapped places`;
+            if (bounds.length) state.map.fitBounds(bounds, { padding: [28, 28], maxZoom: 11 });
+        }
+
+        function compactByPlace(items, mode) {
+            const map = new Map();
+            items.forEach(item => {
+                if (item.lat === null || item.lng === null || item.lat === undefined || item.lng === undefined) return;
+                const key = item.activityPlaceId || item.placeId || `${item.lat},${item.lng}`;
+                const place = placesById.get(item.placeId);
+                const activityPlace = activityPlacesById.get(item.activityPlaceId);
+                if (!map.has(key)) {
+                    map.set(key, {
+                        ...item,
+                        label: activityPlace?.label || place?.label || item.placeLabel || item.locationName || item.title,
+                        lat: activityPlace?.lat ?? item.lat,
+                        lng: activityPlace?.lng ?? item.lng,
+                        isHome: activityPlace?.isHome ?? item.isHome,
+                        isWork: activityPlace?.isWork ?? place?.isWork ?? false,
+                        visitCount: 0,
+                        overnightCount: 0,
+                        awayOvernightCount: 0,
+                        activityCount: mode === "activities" ? 0 : undefined,
+                    });
+                }
+                const row = map.get(key);
+                if (item.nightDate) row.overnightCount += 1;
+                if (item.nightDate && !item.isHome) row.awayOvernightCount += 1;
+                if (item.startUtc) row.visitCount += 1;
+                if (mode === "activities") row.activityCount += 1;
+            });
+            return Array.from(map.values());
+        }
+
+        if (!data) {
+            document.body.innerHTML = "<p style='padding: 24px'>Missing places_dashboard_data.js. Run build_places_dashboard_data.py first.</p>";
+        } else {
+            init();
+        }
+    </script>
+</body>
+</html>
